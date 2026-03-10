@@ -5,9 +5,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && cp server/tjsp-puppeteer.cjs dist/ && cp server/login-worker.py dist/ && cp server/tjsp-cookie-extractor.py dist/ && cp server/gerar_alvara.py dist/ && cp -r server/assets dist/",
+    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && cp server/tjsp-puppeteer.cjs dist/ && cp server/login-worker.py dist/ && cp server/tjsp-cookie-extractor.py dist/ && cp -r server/assets dist/",
     "start": "NODE_ENV=production node dist/index.js",
-    "postinstall": "python3 -c 'import fitz' 2>/dev/null || pip3 install pymupdf --quiet || true",
+    "postinstall": "echo 'postinstall OK'",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
