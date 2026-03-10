@@ -137,15 +137,12 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
 
   processos.forEach((p, idx) => {
     // Identificar partes
-    const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
-      || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
-    const parteAtiva = p.partes?.find(pt => {
-      const t = (pt.polo || pt.tipo || "").toLowerCase();
-      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente") || t.includes("reqte");
-    }) || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
-    const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+    // Recebedor = parte ATIVA (Exeqte, Autor, Reqte, etc.) — quem cobra/pede
+    const partePassiva = p.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || ""))
+      || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
+    const parteAtiva = partePassiva; // alias para clareza
+    const advogado = partePassiva?.advogado || p.partes?.find(pt => pt.advogado)?.advogado || "";
     const telefones = extrairTelefonesDeMovimentacoes(p.movimentacoes || []);
-
     txt += `👤 CLIENTE ${idx + 1}\n`;
     txt += "-".repeat(50) + "\n";
     if (partePassiva) {
@@ -181,6 +178,25 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
     txt += "\n" + "=".repeat(60) + "\n\n";
   });
   return txt;
+}
+
+// Identificar se uma parte é o RECEBEDOR DA CAUSA (Exeqte, Autor, Reqte, Requerente, Apelante, Recorrente, Embargante)
+// O recebedor é quem cobra/pede — a parte ATIVA do processo
+function ehRecebedorDaCausa(tipo: string): boolean {
+  const t = tipo.toLowerCase().trim();
+  return (
+    t.includes("exeqte") || t.includes("exequente") ||
+    t.includes("autor") ||
+    t.includes("reqte") || t.includes("requerente") ||
+    t.includes("impte") || t.includes("impetrante") ||
+    t.includes("agravte") || t.includes("agravante") ||
+    t.includes("apte") || t.includes("apelante") ||
+    t.includes("recorrte") || t.includes("recorrente") ||
+    t.includes("embargante") ||
+    t.includes("querelante") ||
+    t.includes("reclamante") ||
+    t.includes("ativo")
+  );
 }
 
 // Identificar se uma parte é passiva (réu/executado/requerido/impetrado/reclamado)
@@ -219,13 +235,11 @@ function formatarRelatorioTxtEnriquecido(
   txt += "=".repeat(60) + "\n\n";
 
   processos.forEach((p, idx) => {
-    const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
-      || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
-    const parteAtiva = p.partes?.find(pt => {
-      const t = (pt.polo || pt.tipo || "").toLowerCase();
-      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente") || t.includes("reqte");
-    }) || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
-    const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+    // Recebedor = parte ATIVA (Exeqte, Autor, Reqte) — quem cobra/pede e recebe o valor
+    const partePassiva = p.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || ""))
+      || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
+    const parteAtiva = partePassiva;
+    const advogado = partePassiva?.advogado || p.partes?.find(pt => pt.advogado)?.advogado || "";
     const telefonesMov = extrairTelefonesDeMovimentacoes(p.movimentacoes || []);
 
     txt += `👤 CLIENTE ${idx + 1}\n`;
@@ -653,9 +667,10 @@ export default function Painel() {
     if (p.detalheCarregado || !p.codigoProcesso) {
       // Se já carregado, consultar por nome da parte passiva
       if (p.detalheCarregado && p.partes) {
-        const passiva = p.partes.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
-        const nomePassiva = passiva?.nome || "";
-        if (nomePassiva) consultarPorNome(nomePassiva, id, p);
+        // Recebedor = parte ATIVA (Exeqte, Autor, Reqte)
+        const recebedor = p.partes.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || p.partes[0];
+        const nomeRecebedor = recebedor?.nome || "";
+        if (nomeRecebedor) consultarPorNome(nomeRecebedor, id, p);
       }
       return;
     }
@@ -685,10 +700,10 @@ export default function Painel() {
         return novoMapa;
       });
 
-      // Consultar API Supabase por nome da parte passiva
-      const passiva = processoCompleto.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
-      const nomePassiva = passiva?.nome || "";
-      if (nomePassiva) consultarPorNome(nomePassiva, id, processoCompleto);
+      // Consultar API Supabase por nome do RECEBEDOR DA CAUSA (parte ativa: Exeqte, Autor, Reqte)
+      const recebedor = processoCompleto.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || processoCompleto.partes?.[0];
+      const nomeRecebedor = recebedor?.nome || "";
+      if (nomeRecebedor) consultarPorNome(nomeRecebedor, id, processoCompleto);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
@@ -991,10 +1006,10 @@ export default function Painel() {
               </div>
             ) : (
               processosFiltrados.map((p) => {
-                // Extrair parte passiva (executado/réu/requerido) e advogado
-                const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
-                  || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
-                const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+                // Recebedor = parte ATIVA (Exeqte, Autor, Reqte) — quem cobra e recebe o valor
+                const partePassiva = p.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || ""))
+                  || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
+                const advogado = partePassiva?.advogado || p.partes?.find(pt => pt.advogado)?.advogado || "";
                 return (
                   <div
                     key={p.numeroProcesso}
@@ -1019,7 +1034,7 @@ export default function Painel() {
                         {partePassiva && (
                           <div className="mt-2 flex flex-col gap-0.5">
                             <p className="text-xs text-amber-400 truncate">
-                              <span className="text-gray-500">Indenizado: </span>
+                              <span className="text-gray-500">Recebedor: </span>
                               <span className="font-semibold">{partePassiva.nome}</span>
                             </p>
                             {(partePassiva.documento || partePassiva.cpfCnpj) && (
@@ -1113,13 +1128,13 @@ export default function Painel() {
 
               {/* ─── Painel de Dados Enriquecidos via API Supabase (busca por nome) ─── */}
               {(consultaNomeCarregando || consultaNomeResultados.length > 0) && (() => {
-                // Identificar o polo e nome da parte passiva do processo aberto
-                const partePassivaAberta = processoAberto?.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
-                  || (processoAberto?.partes && processoAberto.partes.length > 1 ? processoAberto.partes[processoAberto.partes.length - 1] : null);
+                // Identificar o RECEBEDOR DA CAUSA (parte ativa: Exeqte, Autor, Reqte)
+                const partePassivaAberta = processoAberto?.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || ""))
+                  || (processoAberto?.partes && processoAberto.partes.length > 0 ? processoAberto.partes[0] : null);
                 const tipoPoloPassivo = partePassivaAberta?.polo || partePassivaAberta?.tipo || "";
                 const labelPolo = tipoPoloPassivo
                   ? tipoPoloPassivo.charAt(0).toUpperCase() + tipoPoloPassivo.slice(1).toLowerCase()
-                  : "Parte Passiva";
+                  : "Recebedor";
                 return (
                 <div className="bg-gradient-to-br from-[#0a1628] to-[#0d1f3c] border border-blue-800/40 rounded-xl p-4">
                   {/* Cabeçalho com contexto claro */}
@@ -1348,19 +1363,55 @@ export default function Painel() {
 
               {/* Partes */}
               {processoAberto.partes && processoAberto.partes.length > 0 && (() => {
-                // Mapeamento de descrições por tipo de polo
-                const descricaoPolo: Record<string, { descricao: string; papel: string; cor: string; bg: string }> = {
-                  reqte:    { descricao: "quem entrou com o processo, fazendo o pedido à Justiça", papel: "Requerente / Autor da ação", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
-                  reqda:    { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerida / Ré", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
-                  reqdo:    { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerido / Réu", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
-                  exeqte:   { descricao: "quem está executando a dívida ou o título judicial", papel: "Exequente / Credor", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
-                  exectdo:  { descricao: "quem deve pagar ou cumprir a obrigação determinada pela Justiça", papel: "Executado / Devedor", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
-                  autor:    { descricao: "quem iniciou a ação judicial", papel: "Autor da Ação", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
-                  réu:     { descricao: "quem está sendo processado e deve se defender", papel: "Réu / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
-                  ré:      { descricao: "quem está sendo processada e deve se defender", papel: "Ré / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
-                  impetrado: { descricao: "a autoridade ou entidade que praticou o ato questionado no mandado", papel: "Impetrado", cor: "text-orange-400", bg: "bg-orange-900/30 border-orange-700/40" },
-                  reclamado: { descricao: "quem está sendo reclamado na ação trabalhista", papel: "Reclamado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                // Mapeamento completo de siglas jurídicas por tipo de polo
+                type InfoPolo = { descricao: string; papel: string; cor: string; bg: string };
+                const descricaoPoloMap: Record<string, InfoPolo> = {
+                  // Polo ATIVO (recebedor/credor/autor)
+                  reqte:      { descricao: "quem entrou com o processo, fazendo o pedido à Justiça", papel: "Requerente", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  requerente: { descricao: "quem entrou com o processo, fazendo o pedido à Justiça", papel: "Requerente", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  exeqte:     { descricao: "quem cobra judicialmente uma dívida ou título executivo — o credor da causa", papel: "Exequente / Credor", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  exequente:  { descricao: "quem cobra judicialmente uma dívida ou título executivo — o credor da causa", papel: "Exequente / Credor", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  autor:      { descricao: "quem iniciou a ação judicial", papel: "Autor da Ação", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  impte:      { descricao: "quem entra com mandado de segurança contra ato de autoridade", papel: "Impetrante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  impetrante: { descricao: "quem entra com mandado de segurança contra ato de autoridade", papel: "Impetrante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  agravte:    { descricao: "quem apresenta agravo contra uma decisão judicial", papel: "Agravante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  agravante:  { descricao: "quem apresenta agravo contra uma decisão judicial", papel: "Agravante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  apte:       { descricao: "quem apresenta apelação contra sentença de primeiro grau", papel: "Apelante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  apelante:   { descricao: "quem apresenta apelação contra sentença de primeiro grau", papel: "Apelante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  recorrte:   { descricao: "quem entra com recurso contra uma decisão judicial", papel: "Recorrente", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  recorrente: { descricao: "quem entra com recurso contra uma decisão judicial", papel: "Recorrente", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  embargante: { descricao: "quem entra com embargos contra execução ou decisão", papel: "Embargante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  querelante: { descricao: "quem faz queixa-crime em processo penal privado", papel: "Querelante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
                   reclamante: { descricao: "quem abriu a reclamação trabalhista", papel: "Reclamante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  // Polo PASSIVO (devedor/réu/executado)
+                  reqda:      { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerida / Ré", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  reqdo:      { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerido / Réu", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  requerida:  { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerida / Ré", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  requerido:  { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerido / Réu", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  exectdo:    { descricao: "quem deve pagar ou cumprir a obrigação determinada pela Justiça", papel: "Executado / Devedor", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  exectda:    { descricao: "quem deve pagar ou cumprir a obrigação determinada pela Justiça", papel: "Executada / Devedora", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  executado:  { descricao: "quem deve pagar ou cumprir a obrigação determinada pela Justiça", papel: "Executado / Devedor", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  réu:       { descricao: "quem está sendo processado e deve se defender", papel: "Réu / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  ré:        { descricao: "quem está sendo processada e deve se defender", papel: "Ré / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  impetrado:  { descricao: "a autoridade ou entidade que praticou o ato questionado no mandado de segurança", papel: "Impetrado", cor: "text-orange-400", bg: "bg-orange-900/30 border-orange-700/40" },
+                  agravado:   { descricao: "quem recebeu o agravo e precisa se defender", papel: "Agravado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  apelado:    { descricao: "quem recebeu a apelação e precisa se defender", papel: "Apelado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  recorrido:  { descricao: "quem recebeu o recurso e precisa se defender", papel: "Recorrido", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  embargado:  { descricao: "quem recebeu os embargos e precisa se defender", papel: "Embargado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  reclamado:  { descricao: "quem está sendo reclamado na ação trabalhista", papel: "Reclamado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  querelado:  { descricao: "quem é acusado na queixa-crime em processo penal privado", papel: "Querelado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                };
+                // Função de lookup com correspondência parcial para siglas não mapeadas
+                const getInfoPolo = (tipoRaw: string): InfoPolo => {
+                  if (descricaoPoloMap[tipoRaw]) return descricaoPoloMap[tipoRaw];
+                  // Correspondência parcial
+                  for (const [key, val] of Object.entries(descricaoPoloMap)) {
+                    if (tipoRaw.includes(key) || key.includes(tipoRaw)) return val;
+                  }
+                  // Fallback por polo ativo/passivo
+                  if (ehRecebedorDaCausa(tipoRaw)) return { descricao: "participa como parte ativa neste processo", papel: "Parte Ativa", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" };
+                  if (ehPartePassiva(tipoRaw)) return { descricao: "participa como parte passiva neste processo", papel: "Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" };
+                  return { descricao: "participa do processo nesta qualidade", papel: tipoRaw || "Parte", cor: "text-gray-400", bg: "bg-gray-800/30 border-gray-700/40" };
                 };
                 const numerais = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣"];
                 return (
@@ -1369,7 +1420,7 @@ export default function Painel() {
                     <div className="space-y-4">
                       {processoAberto.partes.map((parte, i) => {
                         const tipoRaw = (parte.polo || parte.tipo || "").toLowerCase().trim();
-                        const info = descricaoPolo[tipoRaw] || {
+                        const info = getInfoPolo(tipoRaw) || {
                           descricao: "participa do processo nesta qualidade",
                           papel: parte.polo || parte.tipo || "Parte",
                           cor: "text-gray-400",
