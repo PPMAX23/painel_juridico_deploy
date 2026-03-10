@@ -120,13 +120,11 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
 
   processos.forEach((p, idx) => {
     // Identificar partes
-    const partePassiva = p.partes?.find(pt => {
-      const t = (pt.polo || pt.tipo || "").toLowerCase();
-      return t.includes("execut") || t.includes("exectd") || t.includes("r\u00e9u") || t.includes("requerid") || t.includes("passiv");
-    }) || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
+    const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
+      || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
     const parteAtiva = p.partes?.find(pt => {
       const t = (pt.polo || pt.tipo || "").toLowerCase();
-      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente");
+      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente") || t.includes("reqte");
     }) || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
     const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
     const telefones = extrairTelefonesDeMovimentacoes(p.movimentacoes || []);
@@ -156,6 +154,107 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
     if (p.valor) txt += `💰 Valor: ${p.valor}\n`;
     if (p.dataDistribuicao) txt += `📅 Distribuicao: ${p.dataDistribuicao}\n`;
     if (p.situacao) txt += `🟢 Situacao: ${p.situacao}\n`;
+    if (p.foro) txt += `📍 Foro: ${p.foro}\n`;
+    if (p.movimentacoes && p.movimentacoes.length > 0) {
+      txt += `\n🗓️  ULTIMAS MOVIMENTACOES:\n`;
+      p.movimentacoes.slice(0, 5).forEach(mov => {
+        txt += `   ▶ ${mov.data}: ${mov.descricao}\n`;
+      });
+    }
+    txt += "\n" + "=".repeat(60) + "\n\n";
+  });
+  return txt;
+}
+
+// Identificar se uma parte é passiva (réu/executado/requerido/impetrado/reclamado)
+function ehPartePassiva(tipo: string): boolean {
+  const t = tipo.toLowerCase().trim();
+  return (
+    t.includes("exectd") ||
+    t.includes("execut") ||
+    t === "réu" || t === "ré" ||
+    t.includes("reqdo") ||
+    t.includes("reqda") ||
+    t.includes("requerido") ||
+    t.includes("requerida") ||
+    t.includes("passiv") ||
+    t.includes("impetrad") ||
+    t.includes("reclamad") ||
+    t.includes("apelad") ||
+    t.includes("embargad") ||
+    t.includes("intimad")
+  );
+}
+
+interface DadosEnriquecidosTxt {
+  pessoa?: PessoaEnriquecida | null;
+  telefones?: Array<{ddd: number; numero: number; numero_completo: string}>;
+}
+
+function formatarRelatorioTxtEnriquecido(
+  processos: ProcessoTJSP[],
+  enriquecidos?: DadosEnriquecidosTxt
+): string {
+  const agora = new Date().toLocaleString("pt-BR");
+  let txt = `⚖️ RELATORIO DE PROCESSOS - TJSP\n`;
+  txt += `📅 DATA: ${agora}\n`;
+  txt += `📊 TOTAL: ${processos.length} processo(s)\n`;
+  txt += "=".repeat(60) + "\n\n";
+
+  processos.forEach((p, idx) => {
+    const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
+      || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
+    const parteAtiva = p.partes?.find(pt => {
+      const t = (pt.polo || pt.tipo || "").toLowerCase();
+      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente") || t.includes("reqte");
+    }) || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
+    const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+    const telefonesMov = extrairTelefonesDeMovimentacoes(p.movimentacoes || []);
+
+    txt += `👤 CLIENTE ${idx + 1}\n`;
+    txt += "-".repeat(50) + "\n";
+
+    // Dados enriquecidos via API Supabase (apenas para processo único aberto)
+    const pessoa = enriquecidos?.pessoa;
+    const telsCpf = enriquecidos?.telefones || [];
+
+    if (pessoa) {
+      txt += `👤 Recebedor: ${pessoa.nome}\n`;
+      txt += `📝 CPF: ${pessoa.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}\n`;
+      if (pessoa.nascimento) txt += `🎂 Nascimento: ${pessoa.nascimento}\n`;
+      if (pessoa.sexo) txt += `👤 Sexo: ${pessoa.sexo === "M" ? "Masculino" : "Feminino"}\n`;
+      if (pessoa.mae && pessoa.mae !== "null") txt += `👩 Mãe: ${pessoa.mae}\n`;
+      if (pessoa.pai && pessoa.pai !== "null") txt += `👨 Pai: ${pessoa.pai}\n`;
+      if (pessoa.score?.CSBA) txt += `📊 Score CSBA: ${pessoa.score.CSBA}\n`;
+      if (pessoa.endereco) {
+        const end = pessoa.endereco;
+        const logradouro = [end.tipo_logradouro, end.logradouro, end.numero,
+          end.complemento && end.complemento !== "null" ? end.complemento : null
+        ].filter(Boolean).join(" ");
+        txt += `📍 Endereço: ${logradouro}${end.bairro ? ` — ${end.bairro}` : ""}${end.cidade ? `, ${end.cidade}/${end.uf}` : ""}${end.cep ? ` CEP ${end.cep}` : ""}\n`;
+      }
+      if (telsCpf.length > 0) {
+        txt += `📱 Telefone(s) CPF: ${telsCpf.map(t => t.numero_completo).join(" | ")}\n`;
+      }
+    } else if (partePassiva) {
+      txt += `👤 Recebedor: ${partePassiva.nome}\n`;
+      if (partePassiva.documento || partePassiva.cpfCnpj) {
+        txt += `📝 CPF/CNPJ: ${partePassiva.documento || partePassiva.cpfCnpj}\n`;
+      }
+    }
+
+    if (parteAtiva) txt += `🏢 Parte Ativa: ${parteAtiva.nome}\n`;
+    if (advogado) txt += `⚖️ Advogado: ${advogado.split(",")[0]}\n`;
+    if (telefonesMov.length > 0) txt += `📱 Tel. Movimentações: ${telefonesMov.join(" | ")}\n`;
+
+    txt += `\n📄 PROCESSO: ${p.numeroProcesso}\n`;
+    if (p.classe) txt += `🏷️  Classe: ${p.classe}\n`;
+    if (p.assunto) txt += `📌 Assunto: ${p.assunto}\n`;
+    if (p.vara) txt += `🏙️  Vara: ${p.vara}\n`;
+    if (p.juiz) txt += `👨\u200d⚖️ Juiz: ${p.juiz}\n`;
+    if (p.valor) txt += `💰 Valor: ${p.valor}\n`;
+    if (p.dataDistribuicao) txt += `📅 Distribuição: ${p.dataDistribuicao}\n`;
+    if (p.situacao) txt += `🟢 Situação: ${p.situacao}\n`;
     if (p.foro) txt += `📍 Foro: ${p.foro}\n`;
     if (p.movimentacoes && p.movimentacoes.length > 0) {
       txt += `\n🗓️  ULTIMAS MOVIMENTACOES:\n`;
@@ -224,6 +323,9 @@ export default function Painel() {
   const [consultaNomeCarregando, setConsultaNomeCarregando] = useState(false);
   const [consultaNomeProcesso, setConsultaNomeProcesso] = useState<string | null>(null);
   const [pessoaSelecionada, setPessoaSelecionada] = useState<PessoaEnriquecida | null>(null);
+  // Telefones via CPF confirmado
+  const [telefonesCpf, setTelefonesCpf] = useState<Array<{ddd: number; numero: number; numero_completo: string}>>([]);
+  const [telefonesCpfCarregando, setTelefonesCpfCarregando] = useState(false);
   // Manter compatibilidade com o tipo DadosCPF para não quebrar o painel de exibição
   const dadosCpf = pessoaSelecionada as DadosCPF | null;
   const dadosCpfCarregando = consultaNomeCarregando;
@@ -409,6 +511,31 @@ export default function Painel() {
     }
   }, [consultaNomeProcesso]);
 
+  // Buscar telefones via CPF confirmado (após seleção de pessoa)
+  const buscarTelefonesPorCPF = useCallback(async (cpf: string) => {
+    const cpfLimpo = cpf.replace(/\D/g, "");
+    if (cpfLimpo.length !== 11) return;
+    setTelefonesCpfCarregando(true);
+    setTelefonesCpf([]);
+    try {
+      const resp = await fetch(`/api/consulta-cpf?cpf=${cpfLimpo}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.telefones?.itens && data.telefones.itens.length > 0) {
+        setTelefonesCpf(data.telefones.itens);
+      }
+    } catch { /* silencioso */ } finally {
+      setTelefonesCpfCarregando(false);
+    }
+  }, []);
+
+  // Quando pessoa é selecionada, buscar telefones automaticamente
+  const selecionarPessoa = useCallback((pessoa: PessoaEnriquecida) => {
+    setPessoaSelecionada(pessoa);
+    setTelefonesCpf([]);
+    buscarTelefonesPorCPF(pessoa.cpf);
+  }, [buscarTelefonesPorCPF]);
+
   const abrirProcesso = useCallback(async (p: ProcessoTJSP) => {
     const id = p.numeroProcesso;
     setProcessoAbertoId(id);
@@ -416,14 +543,12 @@ export default function Painel() {
     setConsultaNomeResultados([]);
     setPessoaSelecionada(null);
     setConsultaNomeProcesso(null);
+    setTelefonesCpf([]);
 
     if (p.detalheCarregado || !p.codigoProcesso) {
       // Se já carregado, consultar por nome da parte passiva
       if (p.detalheCarregado && p.partes) {
-        const passiva = p.partes.find(pt => {
-          const t = (pt.polo || pt.tipo || "").toLowerCase();
-          return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
-        });
+        const passiva = p.partes.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
         const nomePassiva = passiva?.nome || "";
         if (nomePassiva) consultarPorNome(nomePassiva, id);
       }
@@ -456,10 +581,7 @@ export default function Painel() {
       });
 
       // Consultar API Supabase por nome da parte passiva
-      const passiva = processoCompleto.partes?.find(pt => {
-        const t = (pt.polo || pt.tipo || "").toLowerCase();
-        return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
-      });
+      const passiva = processoCompleto.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
       const nomePassiva = passiva?.nome || "";
       if (nomePassiva) consultarPorNome(nomePassiva, id);
     } catch (err: unknown) {
@@ -765,10 +887,8 @@ export default function Painel() {
             ) : (
               processosFiltrados.map((p) => {
                 // Extrair parte passiva (executado/réu/requerido) e advogado
-                const partePassiva = p.partes?.find(pt => {
-                  const t = (pt.polo || pt.tipo || "").toLowerCase();
-                  return t.includes("execut") || t.includes("exectd") || t.includes("r\u00e9u") || t.includes("requerid") || t.includes("passiv") || t.includes("impetrad") || t.includes("reclamad");
-                }) || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
+                const partePassiva = p.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""))
+                  || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
                 const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
                 return (
                   <div
@@ -908,7 +1028,7 @@ export default function Painel() {
                       {consultaNomeResultados.map((pessoa, i) => (
                         <button
                           key={`pessoa-${i}`}
-                          onClick={() => setPessoaSelecionada(pessoa)}
+                          onClick={() => selecionarPessoa(pessoa)}
                           className="w-full text-left p-3 bg-[#0d1a2e] hover:bg-[#112240] border border-blue-900/30 hover:border-blue-600/50 rounded-lg transition-all group"
                         >
                           <div className="flex items-start justify-between gap-2">
@@ -1034,6 +1154,32 @@ export default function Painel() {
                           </p>
                         </div>
                       )}
+
+                      {/* Telefones via CPF confirmado */}
+                      <div className="border-t border-blue-900/30 pt-2">
+                        <p className="text-xs text-gray-500 mb-2">📱 Telefones (via CPF)</p>
+                        {telefonesCpfCarregando ? (
+                          <p className="text-xs text-gray-500 animate-pulse">Buscando telefones...</p>
+                        ) : telefonesCpf.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {telefonesCpf.map((tel, i) => (
+                              <a
+                                key={i}
+                                href={`https://wa.me/55${tel.ddd}${tel.numero}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/30 hover:bg-green-800/40 border border-green-700/40 rounded-lg text-green-400 text-xs font-semibold transition-colors"
+                              >
+                                <span>📱</span>
+                                <span>{tel.numero_completo}</span>
+                                <span className="text-green-600 text-xs">WhatsApp</span>
+                              </a>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-600">Nenhum telefone encontrado para este CPF</p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1135,7 +1281,7 @@ export default function Painel() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => {
-                      const txt = formatarRelatorioTxt([processoAberto]);
+                      const txt = formatarRelatorioTxtEnriquecido([processoAberto], { pessoa: pessoaSelecionada, telefones: telefonesCpf });
                       navigator.clipboard.writeText(txt).then(() => toast.success("Copiado!"));
                     }}
                     className="px-3 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
@@ -1144,7 +1290,7 @@ export default function Painel() {
                   </button>
                   <button
                     onClick={() => {
-                      const txt = formatarRelatorioTxt([processoAberto]);
+                      const txt = formatarRelatorioTxtEnriquecido([processoAberto], { pessoa: pessoaSelecionada, telefones: telefonesCpf });
                       downloadTxt(txt, `processo_${processoAberto.numeroProcesso}.txt`);
                     }}
                     className="px-3 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
@@ -1153,7 +1299,7 @@ export default function Painel() {
                   </button>
                   <button
                     onClick={() => {
-                      const txt = formatarRelatorioTxt([processoAberto]);
+                      const txt = formatarRelatorioTxtEnriquecido([processoAberto], { pessoa: pessoaSelecionada, telefones: telefonesCpf });
                       const encoded = encodeURIComponent(txt.substring(0, 4000));
                       window.open(`https://wa.me/?text=${encoded}`, "_blank");
                     }}

@@ -301,10 +301,12 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
     const tipo = tipoEl.text().trim().replace(/\s+/g, " ").replace(/&nbsp;/g, "").trim();
     const nomeTexto = nomeEl.text().replace(/\s+/g, " ").trim();
 
-    const advMatches = nomeTexto.match(/Advogado[:\s]+([^A-Z][^\n]+?)(?=\s*Advogado|$)/gi) || [];
-    const advogados: string[] = advMatches.map(m => m.replace(/^Advogado[:\s]+/i, "").trim()).filter(Boolean);
+    // Capturar advogados (Advogado, Advogada, Adv.)
+    const advMatches = nomeTexto.match(/Advogad[oa][:\s]+([^\n]+?)(?=\s*Advogad[oa]|$)/gi) || [];
+    const advogados: string[] = advMatches.map(m => m.replace(/^Advogad[oa][:\s]+/i, "").trim()).filter(Boolean);
 
-    const nomeParte = nomeTexto.split(/\s*Advogado[:\s]/i)[0].trim();
+    // Limpar nome: remover tudo a partir de Advogado/Advogada
+    const nomeParte = nomeTexto.split(/\s*Advogad[oa][:\s]/i)[0].trim();
 
     if (nomeParte && tipo) {
       partes.push({

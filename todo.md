@@ -138,3 +138,17 @@
 - [x] Telefones atualizados da base com link direto para WhatsApp
 - [x] Endereço completo (logradouro, bairro, cidade/UF, CEP)
 - [x] 47 testes vitest passando
+
+## Correções e Melhorias Fase 7 (Mar 2026)
+- [x] Correção do filtro de parte passiva: Reqdo, Reqda, Réu, Ré agora identificados corretamente
+- [x] Correção do parser de partes no servidor: "Advogada:" (feminino) extraído corretamente
+- [x] Função ehPartePassiva() centralizada usada em todos os filtros do frontend
+- [x] Integração API Supabase /consulta (busca por nome) para dados reais do indenizado
+- [x] Endpoint proxy GET /api/consulta-nome?nome=... (busca por nome na API Supabase)
+- [x] Busca automática por nome da parte passiva ao abrir detalhe do processo
+- [x] Seleção de pessoa quando há múltiplos resultados com mesmo nome
+- [x] Busca de telefone via CPF confirmado após seleção (endpoint /consulta-cpf)
+- [x] Seção "Telefones (via CPF)" com botão WhatsApp no painel de dados enriquecidos
+- [x] Dados enriquecidos incluídos no TXT exportado (CPF, endereço, telefones via CPF)
+- [x] Função formatarRelatorioTxtEnriquecido() com dados da API Supabase
+- [x] 47 testes vitest passando
