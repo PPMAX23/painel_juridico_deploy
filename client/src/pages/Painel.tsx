@@ -1326,19 +1326,40 @@ export default function Painel() {
                                   {pessoa.endereco.bairro ? ` — ${pessoa.endereco.bairro}` : ""}
                                 </p>
                               )}
-                              {/* Telefones com indicador de WhatsApp */}
+                              {/* Telefones */}
                               {pessoa.telefones?.itens && pessoa.telefones.itens.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-1">
-                                  {pessoa.telefones.itens.slice(0, 4).map((tel: any, ti: number) => (
-                                    <span key={ti} className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#0a1628] border border-blue-900/40 text-gray-300 flex items-center gap-1">
-                                      {tel.whatsapp ? <span className="text-green-400 text-[10px]">WA</span> : <span className="text-gray-600 text-[10px]">📞</span>}
-                                      ({tel.ddd}) {tel.numero}
-                                    </span>
-                                  ))}
-                                  {pessoa.telefones.itens.length > 4 && (
-                                    <span className="text-xs text-gray-600">+{pessoa.telefones.itens.length - 4}</span>
+                                  {pessoa.telefones.itens.slice(0, 5).map((tel: any, ti: number) => {
+                                    const numero = tel.numero_completo || `(${tel.ddd}) ${tel.numero}`;
+                                    const numLimpo = `55${tel.ddd}${tel.numero}`;
+                                    const isCelular = String(tel.numero).length >= 9 || String(tel.numero).startsWith('9');
+                                    return (
+                                      <a
+                                        key={ti}
+                                        href={`https://wa.me/${numLimpo}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={e => e.stopPropagation()}
+                                        className="text-xs font-mono px-1.5 py-0.5 rounded border flex items-center gap-1 transition-colors"
+                                        style={{
+                                          backgroundColor: isCelular ? "#052e16" : "#0a1628",
+                                          borderColor: isCelular ? "#16a34a40" : "#1e3a5f40",
+                                          color: isCelular ? "#86efac" : "#93c5fd",
+                                        }}
+                                        title={isCelular ? "Celular — abrir WhatsApp" : "Fixo"}
+                                      >
+                                        {isCelular ? <span className="text-green-400 text-[9px] font-bold">WA</span> : <span className="text-[9px]">TEL</span>}
+                                        {numero}
+                                      </a>
+                                    );
+                                  })}
+                                  {pessoa.telefones.itens.length > 5 && (
+                                    <span className="text-xs text-gray-500 self-center">+{pessoa.telefones.itens.length - 5} tel</span>
                                   )}
                                 </div>
+                              )}
+                              {(!pessoa.telefones?.itens || pessoa.telefones.itens.length === 0) && (
+                                <p className="text-xs text-gray-600 mt-1">Sem telefones cadastrados</p>
                               )}
                             </div>
                             <div className="flex flex-col items-end gap-1 shrink-0">

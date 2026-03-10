@@ -325,10 +325,7 @@ router.get("/consulta-nome", async (req: Request, res: Response) => {
     const nomeLimpo = String(nome).trim().toUpperCase();
     const url = `https://gwfhslsfukikfbyvysms.supabase.co/functions/v1/consulta?token=bdd5ba8bf04400a22677a47550437bd5&name=${encodeURIComponent(nomeLimpo)}`;
     const resp = await fetch(url, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "PainelJuridico/1.0",
-      },
+      headers: { "Accept": "application/json", "User-Agent": "PainelJuridico/1.0" },
     });
     if (!resp.ok) {
       return res.status(resp.status).json({ error: `Erro na API: ${resp.status}` });
@@ -336,16 +333,41 @@ router.get("/consulta-nome", async (req: Request, res: Response) => {
     const data = await resp.json();
 
     // ── Filtro por DDD da comarca do fórum ──────────────────────────────────
-    if (foro && data.itens && Array.isArray(data.itens) && data.itens.length > 1) {
+    let itens: any[] = data.itens || [];
+    if (foro && itens.length > 1) {
       const dddsValidos = obterDDDsPorForo(String(foro));
       if (dddsValidos.length > 0) {
-        const itensFiltrados = filtrarPessoasPorDDD(data.itens, dddsValidos);
-        console.log(`[consulta-nome] Foro: "${foro}" → DDDs: [${dddsValidos}] | ${data.itens.length} → ${itensFiltrados.length} pessoas`);
-        return res.json({ ...data, itens: itensFiltrados, total: itensFiltrados.length, _filtro_ddd: dddsValidos });
+        const filtrados = filtrarPessoasPorDDD(itens, dddsValidos);
+        console.log(`[consulta-nome] Foro: "${foro}" → DDDs: [${dddsValidos}] | ${itens.length} → ${filtrados.length} pessoas`);
+        itens = filtrados.length > 0 ? filtrados : itens; // fallback se filtrar tudo
       }
     }
 
-    return res.json(data);
+    // ── Enriquecer cada pessoa com telefones via consulta-cpf em paralelo ──────
+    const enriquecidos = await Promise.all(
+      itens.map(async (pessoa: any) => {
+        const cpfLimpo = String(pessoa.cpf || "").replace(/\D/g, "");
+        if (cpfLimpo.length !== 11) return pessoa;
+        try {
+          const cpfUrl = `https://gwfhslsfukikfbyvysms.supabase.co/functions/v1/consulta-cpf?token=bdd5ba8bf04400a22677a47550437bd5&cpf=${cpfLimpo}`;
+          const cpfResp = await fetch(cpfUrl, {
+            headers: { "Accept": "application/json", "User-Agent": "PainelJuridico/1.0" },
+            signal: AbortSignal.timeout(5000), // 5s timeout por pessoa
+          });
+          if (!cpfResp.ok) return pessoa;
+          const cpfData = await cpfResp.json();
+          // Mesclar telefones na pessoa
+          return {
+            ...pessoa,
+            telefones: cpfData.telefones || null,
+          };
+        } catch {
+          return pessoa; // silencioso se falhar
+        }
+      })
+    );
+
+    return res.json({ ...data, itens: enriquecidos, total: enriquecidos.length });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({ error: msg });
