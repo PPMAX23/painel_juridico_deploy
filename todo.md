@@ -152,3 +152,16 @@
 - [x] Dados enriquecidos incluídos no TXT exportado (CPF, endereço, telefones via CPF)
 - [x] Função formatarRelatorioTxtEnriquecido() com dados da API Supabase
 - [x] 47 testes vitest passando
+
+## Geração de Alvará Judicial (Fase 8 - Mar 2026)
+- [x] Serviço alvara.service.ts com PDFKit para geração de PDF
+- [x] Endpoint POST /api/alvara/gerar com dados do processo
+- [x] PDF fiel ao modelo: brasão, caixa de informações, texto jurídico completo
+- [x] Segunda página com Termo de Sigilo e assinatura
+- [x] Botão 🏛️ EMITIR ALVARÁ na seção de Ações do modal de detalhe
+- [x] Dados preenchidos automaticamente: recebedor, CPF (via API Supabase), advogado, réu, vara, foro, valor
+- [x] Download automático do PDF com nome do recebedor
+- [x] Tela de senha de acesso (384378) antes do painel
+- [x] Seção de Partes reformulada com siglas jurídicas completas e descrições
+- [x] Exeqte sempre identificado como recebedor da causa
+- [x] 47 testes vitest passando

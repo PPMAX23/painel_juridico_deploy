@@ -294,6 +294,26 @@ Gere um ofício formal com:
 
 export default router;
 
+// ─── Geração de Alvará em PDF ───────────────────────────────────────────────
+router.post("/alvara/gerar", async (req: Request, res: Response) => {
+  try {
+    const { gerarAlvaraPDF } = await import("./alvara.service.js");
+    const dados = req.body;
+    if (!dados || !dados.numeroProcesso || !dados.nomeReclamante) {
+      return res.status(400).json({ error: "Dados insuficientes para gerar o alvará" });
+    }
+    const pdfBuffer = await gerarAlvaraPDF(dados);
+    const nomeArquivo = `Alvara-${dados.nomeReclamante.replace(/\s+/g, "").toUpperCase()}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${nomeArquivo}"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: msg });
+  }
+});
+
 // ─── Consulta por Nome via API Supabase ─────────────────────────────────────
 router.get("/consulta-nome", async (req: Request, res: Response) => {
   const { nome } = req.query as { nome?: string };

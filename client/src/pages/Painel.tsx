@@ -839,6 +839,61 @@ export default function Painel() {
     }
   }, []);
 
+  const emitirAlvara = useCallback(async (p: ProcessoTJSP) => {
+    try {
+      // Recebedor = parte ATIVA (Exeqte, Autor, Reqte)
+      const recebedor = p.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || p.partes?.[0];
+      const reu = p.partes?.find(pt => !ehRecebedorDaCausa(pt.polo || pt.tipo || ""));
+      const advogadoRecebedor = recebedor?.advogado || "";
+
+      // CPF da pessoa selecionada via API Supabase
+      const cpfRecebedor = pessoaSelecionada?.cpf
+        ? pessoaSelecionada.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")
+        : "";
+
+      const dados = {
+        numeroProcesso: p.numeroProcesso || "",
+        dataAtuacao: new Date().toLocaleDateString("pt-BR"),
+        valorCausa: p.valor || "",
+        nomeReclamante: recebedor?.nome || "",
+        cpfReclamante: cpfRecebedor,
+        nomeAdvogado: advogadoRecebedor,
+        nomeReu: reu?.nome || "",
+        vara: p.vara || "",
+        foro: p.foro || "",
+        juiz: p.juiz || "",
+        classe: p.classe || "",
+        assunto: p.assunto || "",
+      };
+
+      toast.loading("Gerando alvará...", { id: "alvara" });
+      const resp = await fetch("/api/alvara/gerar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dados),
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json();
+        toast.error("Erro ao gerar alvará: " + (errData.error || "Erro desconhecido"), { id: "alvara" });
+        return;
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Alvara-${(recebedor?.nome || "processo").replace(/\s+/g, "").toUpperCase()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Alvará gerado com sucesso!", { id: "alvara" });
+    } catch (err: unknown) {
+      toast.error("Erro ao gerar alvará: " + (err instanceof Error ? err.message : String(err)), { id: "alvara" });
+    }
+  }, [pessoaSelecionada]);
+
   const copiarIaTexto = useCallback(() => {
     navigator.clipboard.writeText(iaTexto).then(() => toast.success("Texto copiado!"));
   }, [iaTexto]);
@@ -1573,6 +1628,12 @@ export default function Painel() {
                     className="px-3 py-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
                   >
                     📜 OFÍCIO
+                  </button>
+                  <button
+                    onClick={() => emitirAlvara(processoAberto)}
+                    className="px-3 py-2 bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-lg shadow-amber-900/30"
+                  >
+                    🏛️ EMITIR ALVARÁ
                   </button>
                   {processoAberto.urlPastaDigital && (
                     <a
