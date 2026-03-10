@@ -111,3 +111,4 @@
 - [x] Endpoint /api/processo/detalhe aceita codigo+foro ou url
 - [x] Frontend atualizado para usar campos tipo/cpfCnpj/titulo dos novos tipos
 - [x] 30 testes vitest passando
+- [x] Correção do erro removeChild causado pelo Google Translate (translate=no no HTML/App)

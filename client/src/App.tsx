@@ -22,8 +22,11 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          <Toaster theme="dark" position="top-right" />
-          <Router />
+          {/* translate="no" previne o Google Translate de modificar o DOM e causar erros no React */}
+          <div translate="no" className="contents">
+            <Toaster theme="dark" position="top-right" />
+            <Router />
+          </div>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
