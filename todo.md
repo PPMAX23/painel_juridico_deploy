@@ -127,3 +127,14 @@
 - [x] Exportação TXT organizada por cliente com ícones (recebedor, CPF, advogado, telefone)
 - [x] Extração de telefones das movimentações com botão direto para WhatsApp
 - [x] 41 testes vitest passando
+
+## Integração API CPF Supabase (Fase 6 - Mar 2026)
+- [x] Endpoint proxy GET /api/consulta-cpf?cpf=... (token protegido no servidor)
+- [x] Consulta automática ao abrir detalhe do processo (CPF da parte passiva)
+- [x] Painel "DADOS ENRIQUECIDOS — INDENIZADO" no modal de detalhe
+- [x] Exibição de: nome completo, CPF formatado, nascimento, sexo, estado civil
+- [x] Exibição de filiação (mãe/pai)
+- [x] Score de crédito CSB8 e CSBA com cores por faixa (ALTISSIMO/ALTO/MEDIO/BAIXO)
+- [x] Telefones atualizados da base com link direto para WhatsApp
+- [x] Endereço completo (logradouro, bairro, cidade/UF, CEP)
+- [x] 47 testes vitest passando

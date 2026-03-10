@@ -293,3 +293,37 @@ Gere um ofício formal com:
 });
 
 export default router;
+
+// ─── Consulta CPF via API Supabase ────────────────────────────────────────────
+router.get("/consulta-cpf", async (req: Request, res: Response) => {
+  const { cpf } = req.query as { cpf?: string };
+  if (!cpf) {
+    return res.status(400).json({ error: "Parâmetro cpf é obrigatório" });
+  }
+
+  // Limpar CPF (remover pontos, traços, espaços)
+  const cpfLimpo = String(cpf).replace(/\D/g, "");
+  if (cpfLimpo.length !== 11) {
+    return res.status(400).json({ error: "CPF deve ter 11 dígitos" });
+  }
+
+  try {
+    const url = `https://gwfhslsfukikfbyvysms.supabase.co/functions/v1/consulta-cpf?token=bdd5ba8bf04400a22677a47550437bd5&cpf=${cpfLimpo}`;
+    const resp = await fetch(url, {
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "PainelJuridico/1.0",
+      },
+    });
+
+    if (!resp.ok) {
+      return res.status(resp.status).json({ error: `Erro na API: ${resp.status}` });
+    }
+
+    const data = await resp.json();
+    return res.json(data);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: msg });
+  }
+});

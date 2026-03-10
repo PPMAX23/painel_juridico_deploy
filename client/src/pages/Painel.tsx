@@ -50,6 +50,20 @@ interface ResultadoBusca {
   processos: ProcessoTJSP[];
 }
 
+// ─── Tipo retorno API CPF ─────────────────────────────────────────────────────
+interface DadosCPF {
+  status: string;
+  cpf: string;
+  nome: string;
+  sexo?: string;
+  nascimento?: string;
+  filiacao?: { mae?: string; pai?: string };
+  estado_civil?: string;
+  score?: { CSB8?: string; faixa_CSB8?: string; CSBA?: number; faixa_CSBA?: string };
+  enderecos?: { total: number; itens: Array<{ tipo_logradouro?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string; cep?: string }> };
+  telefones?: { total: number; itens: Array<{ ddd: number; numero: number; numero_completo: string }> };
+}
+
 interface StatusTJSP {
   autenticado: boolean;
   expiracao: string | null;
@@ -181,6 +195,11 @@ export default function Painel() {
 
   // Detalhe carregando
   const [detalheCarregando, setDetalheCarregando] = useState(false);
+
+  // Dados enriquecidos via API CPF
+  const [dadosCpf, setDadosCpf] = useState<DadosCPF | null>(null);
+  const [dadosCpfCarregando, setDadosCpfCarregando] = useState(false);
+  const [dadosCpfProcesso, setDadosCpfProcesso] = useState<string | null>(null); // qual processo foi consultado
 
   // Status TJSP
   const [statusTJSP, setStatusTJSP] = useState<StatusTJSP>({ autenticado: false, expiracao: null, tempoRestante: null });
@@ -341,11 +360,43 @@ export default function Painel() {
     if (e.key === "Enter") buscar();
   };
 
+  // Consultar API CPF para parte passiva
+  const consultarCPF = useCallback(async (cpf: string, processoId: string) => {
+    const cpfLimpo = cpf.replace(/\D/g, "");
+    if (cpfLimpo.length !== 11) return; // só CPF (11 dígitos), não CNPJ
+    if (dadosCpfProcesso === processoId) return; // já consultado para este processo
+    setDadosCpfCarregando(true);
+    setDadosCpf(null);
+    setDadosCpfProcesso(processoId);
+    try {
+      const resp = await fetch(`/api/consulta-cpf?cpf=${cpfLimpo}`);
+      if (!resp.ok) return;
+      const data: DadosCPF = await resp.json();
+      if (data.status === "OK") setDadosCpf(data);
+    } catch { /* silencioso */ } finally {
+      setDadosCpfCarregando(false);
+    }
+  }, [dadosCpfProcesso]);
+
   const abrirProcesso = useCallback(async (p: ProcessoTJSP) => {
     const id = p.numeroProcesso;
     setProcessoAbertoId(id);
+    // Limpar dados CPF do processo anterior
+    setDadosCpf(null);
+    setDadosCpfProcesso(null);
 
-    if (p.detalheCarregado || !p.codigoProcesso) return;
+    if (p.detalheCarregado || !p.codigoProcesso) {
+      // Se já carregado, verificar se tem CPF da parte passiva para consultar
+      if (p.detalheCarregado && p.partes) {
+        const passiva = p.partes.find(pt => {
+          const t = (pt.polo || pt.tipo || "").toLowerCase();
+          return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
+        });
+        const cpf = passiva?.documento || passiva?.cpfCnpj || "";
+        if (cpf) consultarCPF(cpf, id);
+      }
+      return;
+    }
 
     setDetalheCarregando(true);
 
@@ -371,13 +422,21 @@ export default function Painel() {
         novoMapa.set(id, processoCompleto);
         return novoMapa;
       });
+
+      // Consultar API CPF para parte passiva automaticamente
+      const passiva = processoCompleto.partes?.find(pt => {
+        const t = (pt.polo || pt.tipo || "").toLowerCase();
+        return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
+      });
+      const cpfPassiva = passiva?.documento || passiva?.cpfCnpj || "";
+      if (cpfPassiva) consultarCPF(cpfPassiva, id);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
     } finally {
       setDetalheCarregando(false);
     }
-  }, []);
+  }, [consultarCPF]);
 
   const configurarCookies = useCallback(async () => {
     if (!cookiesInput.trim()) {
@@ -794,6 +853,139 @@ export default function Painel() {
                   </div>
                 );
               })()}
+
+              {/* ─── Painel de Dados Enriquecidos via API CPF ─── */}
+              {(dadosCpfCarregando || dadosCpf) && (
+                <div className="bg-gradient-to-br from-[#0a1628] to-[#0d1f3c] border border-blue-800/40 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xs font-bold text-blue-400 tracking-wider">🔍 DADOS ENRIQUECIDOS — INDENIZADO</h3>
+                    {dadosCpfCarregando && (
+                      <span className="flex items-center gap-1.5 text-xs text-blue-400">
+                        <span className="w-3 h-3 border border-blue-400/30 border-t-blue-400 rounded-full animate-spin"></span>
+                        Consultando base...
+                      </span>
+                    )}
+                  </div>
+
+                  {dadosCpf && (
+                    <div className="space-y-3">
+                      {/* Dados Pessoais */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <p className="text-xs text-gray-500">Nome Completo</p>
+                          <p className="text-sm text-white font-semibold">{dadosCpf.nome}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">CPF</p>
+                          <p className="text-sm text-white font-mono">{dadosCpf.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</p>
+                        </div>
+                        {dadosCpf.nascimento && (
+                          <div>
+                            <p className="text-xs text-gray-500">Nascimento</p>
+                            <p className="text-sm text-white">{dadosCpf.nascimento}</p>
+                          </div>
+                        )}
+                        {dadosCpf.sexo && (
+                          <div>
+                            <p className="text-xs text-gray-500">Sexo</p>
+                            <p className="text-sm text-white">{dadosCpf.sexo === "M" ? "Masculino" : "Feminino"}</p>
+                          </div>
+                        )}
+                        {dadosCpf.estado_civil && (
+                          <div>
+                            <p className="text-xs text-gray-500">Estado Civil</p>
+                            <p className="text-sm text-white">{dadosCpf.estado_civil}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Filiação */}
+                      {dadosCpf.filiacao && (dadosCpf.filiacao.mae || dadosCpf.filiacao.pai) && (
+                        <div className="border-t border-blue-900/30 pt-2">
+                          <p className="text-xs text-gray-500 mb-1">Filiação</p>
+                          {dadosCpf.filiacao.mae && <p className="text-xs text-gray-300">👩 Mãe: {dadosCpf.filiacao.mae}</p>}
+                          {dadosCpf.filiacao.pai && <p className="text-xs text-gray-300">👨 Pai: {dadosCpf.filiacao.pai}</p>}
+                        </div>
+                      )}
+
+                      {/* Score de Crédito */}
+                      {dadosCpf.score && (
+                        <div className="border-t border-blue-900/30 pt-2">
+                          <p className="text-xs text-gray-500 mb-2">Score de Crédito</p>
+                          <div className="flex gap-3">
+                            {dadosCpf.score.CSB8 && (
+                              <div className="bg-[#111128] rounded-lg px-3 py-2 text-center">
+                                <p className="text-lg font-bold text-yellow-400">{dadosCpf.score.CSB8}</p>
+                                <p className="text-xs text-gray-500">CSB8</p>
+                                {dadosCpf.score.faixa_CSB8 && (
+                                  <p className="text-xs font-semibold mt-0.5" style={{
+                                    color: dadosCpf.score.faixa_CSB8 === "ALTISSIMO" ? "#f59e0b" :
+                                           dadosCpf.score.faixa_CSB8 === "ALTO" ? "#22c55e" :
+                                           dadosCpf.score.faixa_CSB8 === "MEDIO" ? "#3b82f6" :
+                                           dadosCpf.score.faixa_CSB8 === "BAIXO" ? "#ef4444" : "#9ca3af"
+                                  }}>{dadosCpf.score.faixa_CSB8}</p>
+                                )}
+                              </div>
+                            )}
+                            {dadosCpf.score.CSBA !== undefined && (
+                              <div className="bg-[#111128] rounded-lg px-3 py-2 text-center">
+                                <p className="text-lg font-bold text-blue-400">{dadosCpf.score.CSBA}</p>
+                                <p className="text-xs text-gray-500">CSBA</p>
+                                {dadosCpf.score.faixa_CSBA && (
+                                  <p className="text-xs font-semibold mt-0.5" style={{
+                                    color: dadosCpf.score.faixa_CSBA === "ALTISSIMO" ? "#f59e0b" :
+                                           dadosCpf.score.faixa_CSBA === "ALTO" ? "#22c55e" :
+                                           dadosCpf.score.faixa_CSBA === "MEDIO" ? "#3b82f6" :
+                                           dadosCpf.score.faixa_CSBA === "BAIXO" ? "#ef4444" : "#9ca3af"
+                                  }}>{dadosCpf.score.faixa_CSBA}</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Telefones da API CPF */}
+                      {dadosCpf.telefones && dadosCpf.telefones.total > 0 && (
+                        <div className="border-t border-blue-900/30 pt-2">
+                          <p className="text-xs text-gray-500 mb-2">📱 Telefones Atualizados ({dadosCpf.telefones.total})</p>
+                          <div className="flex flex-wrap gap-2">
+                            {dadosCpf.telefones.itens.map((tel, i) => (
+                              <a
+                                key={`cpf-tel-${i}`}
+                                href={`https://wa.me/55${tel.ddd}${tel.numero}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-400 rounded-lg text-xs font-mono font-semibold flex items-center gap-1.5 transition-all border border-emerald-800/30"
+                              >
+                                📱 {tel.numero_completo}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Endereço */}
+                      {dadosCpf.enderecos && dadosCpf.enderecos.total > 0 && dadosCpf.enderecos.itens[0] && (
+                        <div className="border-t border-blue-900/30 pt-2">
+                          <p className="text-xs text-gray-500 mb-1">📍 Endereço ({dadosCpf.enderecos.total} registro{dadosCpf.enderecos.total > 1 ? "s" : ""})</p>
+                          {(() => {
+                            const end = dadosCpf.enderecos!.itens[0];
+                            return (
+                              <p className="text-xs text-gray-300">
+                                {[end.tipo_logradouro, end.logradouro, end.numero].filter(Boolean).join(" ")}
+                                {end.bairro ? ` — ${end.bairro}` : ""}
+                                {end.cidade ? `, ${end.cidade}/${end.uf}` : ""}
+                                {end.cep ? ` — CEP ${end.cep}` : ""}
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Dados do Processo */}
               <div className="bg-[#111128] rounded-xl p-4 space-y-2">

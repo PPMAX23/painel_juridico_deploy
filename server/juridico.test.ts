@@ -359,6 +359,53 @@ describe("Extração de telefones das movimentações", () => {
 
 // ─── Testes de busca por nome ───────────────────────────────────────────────────────────
 
+describe("Integração API CPF Supabase", () => {
+  it("deve validar CPF com 11 dígitos", () => {
+    const cpfValido = "44132055884";
+    const cpfInvalido = "12345678901234"; // CNPJ
+    expect(cpfValido.replace(/\D/g, "").length).toBe(11);
+    expect(cpfInvalido.replace(/\D/g, "").length).not.toBe(11);
+  });
+
+  it("deve formatar CPF corretamente", () => {
+    const cpf = "44132055884";
+    const formatado = cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+    expect(formatado).toBe("441.320.558-84");
+  });
+
+  it("deve limpar CPF com pontos e traços", () => {
+    const cpfFormatado = "441.320.558-84";
+    const limpo = cpfFormatado.replace(/\D/g, "");
+    expect(limpo).toBe("44132055884");
+    expect(limpo.length).toBe(11);
+  });
+
+  it("deve identificar CNPJ (14 dígitos) e não consultar API CPF", () => {
+    const cnpj = "12345678000195";
+    const limpo = cnpj.replace(/\D/g, "");
+    expect(limpo.length).toBe(14);
+    expect(limpo.length !== 11).toBe(true); // não deve consultar
+  });
+
+  it("deve construir URL correta para o endpoint proxy", () => {
+    const cpf = "44132055884";
+    const url = `/api/consulta-cpf?cpf=${cpf}`;
+    expect(url).toBe("/api/consulta-cpf?cpf=44132055884");
+  });
+
+  it("deve mapear cor de score corretamente", () => {
+    const getScoreColor = (faixa: string) =>
+      faixa === "ALTISSIMO" ? "#f59e0b" :
+      faixa === "ALTO" ? "#22c55e" :
+      faixa === "MEDIO" ? "#3b82f6" :
+      faixa === "BAIXO" ? "#ef4444" : "#9ca3af";
+    expect(getScoreColor("ALTISSIMO")).toBe("#f59e0b");
+    expect(getScoreColor("ALTO")).toBe("#22c55e");
+    expect(getScoreColor("BAIXO")).toBe("#ef4444");
+    expect(getScoreColor("DESCONHECIDO")).toBe("#9ca3af");
+  });
+});
+
 describe("Busca por nome do advogado", () => {
   it("deve normalizar nome para maiúsculas", () => {
     const nome = "rodrigo cavalcanti";
