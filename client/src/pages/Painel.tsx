@@ -532,61 +532,128 @@ export default function Painel() {
     if (itens.length === 0) return null;
     if (itens.length === 1) return itens[0];
 
-    // Extrair UF do processo a partir do foro ou vara
-    const foro = (processo?.foro || "").toLowerCase();
-    const vara = (processo?.vara || "").toLowerCase();
-    const contexto = foro + " " + vara;
+    const nomeForo = processo?.foro || "";
 
-    // Mapa de cidades/estados mencionados no foro para UF
-    const ufMap: Record<string, string> = {
-      "são paulo": "SP", "sp": "SP", "campinas": "SP", "santos": "SP", "ribeirão preto": "SP",
-      "rio de janeiro": "RJ", "rj": "RJ", "niterói": "RJ",
-      "minas gerais": "MG", "mg": "MG", "belo horizonte": "MG",
-      "paraná": "PR", "pr": "PR", "curitiba": "PR",
-      "rio grande do sul": "RS", "rs": "RS", "porto alegre": "RS",
-      "bahia": "BA", "ba": "BA", "salvador": "BA",
-      "ceará": "CE", "ce": "CE", "fortaleza": "CE",
-      "pernambuco": "PE", "pe": "PE", "recife": "PE",
-      "goiás": "GO", "go": "GO", "goiânia": "GO",
-      "mato grosso": "MT", "mt": "MT",
-      "distrito federal": "DF", "df": "DF", "brasília": "DF",
-    };
-
-    // TJSP = SP por padrão (número do processo 8.26.xxxx)
-    let ufProcesso = "SP"; // TJSP é sempre SP
-    for (const [chave, uf] of Object.entries(ufMap)) {
-      if (contexto.includes(chave)) { ufProcesso = uf; break; }
+    // ── Extrair cidade da comarca do fórum ──────────────────────────────────
+    function normalizar(s: string) {
+      return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     }
 
-    // Pontuar cada candidato
+    function extrairCidadeForo(foro: string): string {
+      const f = normalizar(foro);
+      if (f.includes("foro central") || f.includes("foro regional")) return "sao paulo";
+      const m = f.match(/foro (?:da comarca )?de\s+(.+)/);
+      if (m) return m[1].trim();
+      return "";
+    }
+
+    function obterDDDs(foro: string): number[] {
+      // Mapa simplificado de foros TJSP → DDDs (espelho do servidor)
+      const map: Array<{chave: string; ddds: number[]}> = [
+        {chave:"foro central",ddds:[11]},{chave:"foro regional",ddds:[11]},
+        {chave:"sao paulo",ddds:[11]},{chave:"guarulhos",ddds:[11]},
+        {chave:"osasco",ddds:[11]},{chave:"santo andre",ddds:[11]},
+        {chave:"sao bernardo",ddds:[11]},{chave:"diadema",ddds:[11]},
+        {chave:"maua",ddds:[11]},{chave:"carapicuiba",ddds:[11]},
+        {chave:"itapevi",ddds:[11]},{chave:"barueri",ddds:[11]},
+        {chave:"cotia",ddds:[11]},{chave:"embu",ddds:[11]},
+        {chave:"taboao da serra",ddds:[11]},{chave:"mogi das cruzes",ddds:[11]},
+        {chave:"suzano",ddds:[11]},{chave:"jundiai",ddds:[11]},
+        {chave:"atibaia",ddds:[11]},{chave:"santos",ddds:[13]},
+        {chave:"sao vicente",ddds:[13]},{chave:"praia grande",ddds:[13]},
+        {chave:"guaruja",ddds:[13]},{chave:"cubatao",ddds:[13]},
+        {chave:"sao jose dos campos",ddds:[12]},{chave:"taubate",ddds:[12]},
+        {chave:"jacarei",ddds:[12]},{chave:"caraguatatuba",ddds:[12]},
+        {chave:"campinas",ddds:[19]},{chave:"sumare",ddds:[19]},
+        {chave:"americana",ddds:[19]},{chave:"indaiatuba",ddds:[19]},
+        {chave:"piracicaba",ddds:[19]},{chave:"limeira",ddds:[19]},
+        {chave:"rio claro",ddds:[19]},{chave:"sorocaba",ddds:[15]},
+        {chave:"ribeirao preto",ddds:[16]},{chave:"franca",ddds:[16]},
+        {chave:"araraquara",ddds:[16]},{chave:"sao carlos",ddds:[16]},
+        {chave:"bauru",ddds:[14]},{chave:"marilia",ddds:[14]},
+        {chave:"botucatu",ddds:[14]},{chave:"avare",ddds:[14]},
+        {chave:"presidente prudente",ddds:[18]},{chave:"aracatuba",ddds:[18]},
+        {chave:"rio preto",ddds:[17]},{chave:"votuporanga",ddds:[17]},
+        {chave:"catanduva",ddds:[17]},{chave:"barretos",ddds:[17]},
+      ];
+      const fn = normalizar(foro);
+      for (const e of map) {
+        if (fn.includes(e.chave)) return e.ddds;
+      }
+      return [];
+    }
+
+    const cidadeComarca = extrairCidadeForo(nomeForo);
+    const dddsValidos = obterDDDs(nomeForo);
+
+    // ── Pontuar cada candidato ───────────────────────────────────────────────
     const pontuados = itens.map(p => {
-      let score = 0;
-      const ufPessoa = p.endereco?.uf?.toUpperCase() || "";
-      const cidadePessoa = (p.endereco?.cidade || "").toLowerCase();
+      let pts = 0;
 
-      // +3 pontos se UF bate com o processo
-      if (ufPessoa === ufProcesso) score += 3;
+      const uf = (p.endereco?.uf || "").toUpperCase();
+      const cidade = normalizar(p.endereco?.cidade || "");
+      const telefones = (p.telefones?.itens || []) as Array<{ddd: number}>;
+      const scoreCSBA = parseInt((p.score as any)?.CSBA || "0", 10) || 0;
+      const nascimento = p.nascimento || "";
 
-      // +2 pontos se cidade aparece no contexto do processo
-      if (cidadePessoa && contexto.includes(cidadePessoa)) score += 2;
+      // 1. UF = SP (TJSP é sempre SP)
+      if (uf === "SP") pts += 10;
+      else if (uf && uf !== "SP") pts -= 8; // outra UF é muito improvável
 
-      // +1 ponto se nome é exatamente igual (sem variações)
-      if (p.nome.trim().toUpperCase() === p.nome.trim().toUpperCase()) score += 1;
+      // 2. Cidade bate com comarca
+      if (cidadeComarca && cidade) {
+        if (cidade.includes(cidadeComarca) || cidadeComarca.includes(cidade)) pts += 8;
+      }
 
-      // -2 pontos se parece ser empresa (tem Ltda, ME, SA, etc.)
-      const nomeLower = p.nome.toLowerCase();
-      if (nomeLower.includes("ltda") || nomeLower.includes(" me ") || nomeLower.includes(" sa ") || nomeLower.includes("eireli")) score -= 2;
+      // 3. DDD do telefone bate com comarca
+      if (dddsValidos.length > 0 && telefones.length > 0) {
+        const temDDD = telefones.some(t => {
+          const ddd = typeof t.ddd === "number" ? t.ddd : parseInt(String(t.ddd), 10);
+          return dddsValidos.includes(ddd);
+        });
+        if (temDDD) pts += 5;
+        else pts -= 3;
+      }
 
-      return { pessoa: p, score };
+      // 4. Score CSBA como indicador de relevância
+      if (scoreCSBA >= 500) pts += 4;
+      else if (scoreCSBA >= 200) pts += 3;
+      else if (scoreCSBA >= 100) pts += 2;
+      else if (scoreCSBA <= 1) pts -= 10; // score 1 = dado fantasma
+      else if (scoreCSBA < 10) pts -= 5;
+
+      // 5. Sem endereço = dado incompleto
+      if (!p.endereco || (!p.endereco.cidade && !p.endereco.uf)) pts -= 5;
+
+      // 6. Menor de 16 anos = provavelmente não é parte
+      if (nascimento) {
+        const partes = nascimento.split("/");
+        const ano = parseInt(partes[2] || "0", 10);
+        if (ano > 0) {
+          const idade = new Date().getFullYear() - ano;
+          if (idade < 16) pts -= 10;
+          else if (idade < 18) pts -= 3;
+        }
+      }
+
+      return { pessoa: p, pts };
     });
 
-    // Ordenar por pontuação
-    pontuados.sort((a, b) => b.score - a.score);
+    pontuados.sort((a, b) => b.pts - a.pts);
 
-    // Se o melhor candidato tem pontuação > 0, selecionar automaticamente
-    if (pontuados[0].score > 0) return pontuados[0].pessoa;
+    const melhor = pontuados[0];
+    const segundo = pontuados.length > 1 ? pontuados[1] : null;
 
-    // Caso contrário, retornar null para exibir lista manual
+    // Selecionar automaticamente se pontuação positiva E diferença >= 3
+    if (melhor.pts > 0 && (!segundo || (melhor.pts - segundo.pts) >= 3)) {
+      return melhor.pessoa;
+    }
+
+    // Se apenas 1 pessoa tem UF=SP, selecionar ela
+    const pessoasSP = pontuados.filter(p => (p.pessoa.endereco?.uf || "").toUpperCase() === "SP");
+    if (pessoasSP.length === 1) return pessoasSP[0].pessoa;
+
+    // Empate: retornar null para exibir lista filtrada (já filtrada por DDD no servidor)
     return null;
   }, []);
 

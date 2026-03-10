@@ -255,3 +255,130 @@ export function filtrarPessoasPorDDD(
   // Fallback: se filtro eliminou todos, retornar original
   return filtradas.length > 0 ? filtradas : pessoas;
 }
+
+/**
+ * Extrai o nome da cidade da comarca a partir do nome do foro TJSP.
+ * Ex: "Foro de Campinas" → "campinas"
+ *     "Foro Central Cível" → "são paulo"
+ *     "Foro de Guarulhos" → "guarulhos"
+ */
+export function extrairCidadeDoForo(nomeForo: string): string {
+  if (!nomeForo) return "";
+  const foro = nomeForo.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  // Foro Central / Regional → São Paulo capital
+  if (foro.includes("foro central") || foro.includes("foro regional")) return "sao paulo";
+
+  // "Foro de X" ou "Foro da Comarca de X"
+  const matchDe = foro.match(/foro (?:da comarca )?de\s+(.+)/);
+  if (matchDe) return matchDe[1].trim();
+
+  // Buscar no mapa de foros para pegar a chave como cidade
+  for (const entrada of FORO_DDD_MAP) {
+    const chave = entrada.chave.toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    if (foro.includes(chave)) return chave;
+  }
+
+  return "";
+}
+
+/**
+ * Seleciona automaticamente a pessoa mais provável de um processo TJSP.
+ *
+ * Algoritmo de pontuação:
+ * 1. +10 se UF = SP (TJSP é sempre SP)
+ * 2. +8  se cidade da pessoa bate com a cidade da comarca do fórum
+ * 3. +5  se DDD do telefone bate com os DDDs da comarca
+ * 4. +3  se score CSBA > 100 (pessoa ativa, com histórico)
+ * 5. +2  se score CSBA > 300
+ * 6. -5  se endereço é null/vazio (pessoa sem dados)
+ * 7. -10 se nascimento indica menor de 16 anos (provavelmente não é parte)
+ * 8. -10 se score CSBA = 1 (dado fantasma/inativo)
+ *
+ * Retorna a pessoa com maior pontuação, ou null se empate/inconclusivo.
+ */
+export function selecionarPessoaDoProcesso(
+  pessoas: any[],
+  nomeForo: string
+): any | null {
+  if (!pessoas || pessoas.length === 0) return null;
+  if (pessoas.length === 1) return pessoas[0];
+
+  const dddsValidos = obterDDDsPorForo(nomeForo);
+  const cidadeComarca = extrairCidadeDoForo(nomeForo);
+
+  const pontuados = pessoas.map(p => {
+    let pts = 0;
+
+    const uf = (p.endereco?.uf || "").toUpperCase();
+    const cidade = (p.endereco?.cidade || "").toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const telefones: any[] = p.telefones?.itens || [];
+    const scoreCSBA = parseInt(p.score?.CSBA || "0", 10) || 0;
+    const nascimento = p.nascimento || "";
+
+    // 1. UF = SP (TJSP é sempre SP)
+    if (uf === "SP") pts += 10;
+    else if (uf && uf !== "SP") pts -= 8; // outra UF é muito improvável
+
+    // 2. Cidade bate com comarca
+    if (cidadeComarca && cidade && cidade.includes(cidadeComarca)) pts += 8;
+    else if (cidadeComarca && cidade && cidadeComarca.includes(cidade) && cidade.length > 3) pts += 6;
+
+    // 3. DDD do telefone bate com comarca
+    if (dddsValidos.length > 0 && telefones.length > 0) {
+      const temDDDValido = telefones.some((t: any) => {
+        const ddd = typeof t.ddd === "number" ? t.ddd : parseInt(String(t.ddd), 10);
+        return dddsValidos.includes(ddd);
+      });
+      if (temDDDValido) pts += 5;
+      else pts -= 3; // tem telefone mas DDD errado
+    }
+
+    // 4. Score CSBA como indicador de relevância
+    if (scoreCSBA >= 500) pts += 4;
+    else if (scoreCSBA >= 200) pts += 3;
+    else if (scoreCSBA >= 100) pts += 2;
+    else if (scoreCSBA <= 1) pts -= 10; // score 1 = dado fantasma
+    else if (scoreCSBA < 10) pts -= 5;
+
+    // 5. Sem endereço = dado incompleto
+    if (!p.endereco || (!p.endereco.cidade && !p.endereco.uf)) pts -= 5;
+
+    // 6. Menor de 16 anos = provavelmente não é parte em processo trabalhista/cível
+    if (nascimento) {
+      const [dia, mes, ano] = nascimento.split("/").map(Number);
+      if (ano) {
+        const anoAtual = new Date().getFullYear();
+        const idade = anoAtual - ano;
+        if (idade < 16) pts -= 10;
+        else if (idade < 18) pts -= 3;
+      }
+    }
+
+    return { pessoa: p, pts };
+  });
+
+  pontuados.sort((a, b) => b.pts - a.pts);
+
+  const melhor = pontuados[0];
+  const segundo = pontuados[1];
+
+  // Selecionar automaticamente se:
+  // - pontuação positiva E
+  // - diferença de pelo menos 3 pontos para o segundo colocado
+  if (melhor.pts > 0 && (melhor.pts - segundo.pts) >= 3) {
+    return melhor.pessoa;
+  }
+
+  // Se UF=SP e todos os outros têm UF diferente de SP, selecionar o SP
+  const soPessoasSP = pontuados.filter(p => (p.pessoa.endereco?.uf || "").toUpperCase() === "SP");
+  if (soPessoasSP.length === 1) return soPessoasSP[0].pessoa;
+
+  // Empate ou inconclusivo: retornar null para exibir lista filtrada
+  return null;
+}
