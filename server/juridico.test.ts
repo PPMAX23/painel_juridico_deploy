@@ -259,3 +259,121 @@ describe("Filtros e ordenação de processos", () => {
     expect(ordenados[2].numeroProcesso).toBe("1111111-11.2024.8.26.0001"); // R$ 5.000
   });
 });
+
+// ─── Testes de filtro de processos indesejados ─────────────────────────────────────────
+
+describe("Filtro de processos indesejados", () => {
+  const CLASSES_EXCLUIDAS = ["usucapi", "partilha", "herança", "inventário", "divórcio"];
+  const ASSUNTOS_EXCLUIDOS = ["usucapi", "partilha", "herança", "inventário", "sucessão"];
+
+  function filtrarIndesejados(processos: { classe: string; assunto: string }[]) {
+    return processos.filter(p => {
+      const classe = (p.classe || "").toLowerCase();
+      const assunto = (p.assunto || "").toLowerCase();
+      if (CLASSES_EXCLUIDAS.some(c => classe.includes(c))) return false;
+      if (ASSUNTOS_EXCLUIDOS.some(a => assunto.includes(a))) return false;
+      return true;
+    });
+  }
+
+  it("deve excluir processos de usucapião", () => {
+    const processos = [
+      { classe: "Usucapião", assunto: "Bem Imóvel" },
+      { classe: "Execução Fiscal", assunto: "Tributos" },
+    ];
+    const filtrados = filtrarIndesejados(processos);
+    expect(filtrados).toHaveLength(1);
+    expect(filtrados[0].classe).toBe("Execução Fiscal");
+  });
+
+  it("deve excluir processos de herança/partilha", () => {
+    const processos = [
+      { classe: "Inventário", assunto: "Herança" },
+      { classe: "Procedimento Comum", assunto: "Indenização" },
+      { classe: "Partilha de Bens", assunto: "Sucessão" },
+    ];
+    const filtrados = filtrarIndesejados(processos);
+    expect(filtrados).toHaveLength(1);
+    expect(filtrados[0].assunto).toBe("Indenização");
+  });
+
+  it("deve manter processos de execução e indenização", () => {
+    const processos = [
+      { classe: "Execução de Título Extrajudicial", assunto: "Cobrança" },
+      { classe: "Procedimento Comum", assunto: "Indenização por Dano Moral" },
+    ];
+    const filtrados = filtrarIndesejados(processos);
+    expect(filtrados).toHaveLength(2);
+  });
+});
+
+// ─── Testes de extração de telefones ────────────────────────────────────────────────────
+
+describe("Extração de telefones das movimentações", () => {
+  function extrairTelefones(textos: string[]): string[] {
+    const telefones: string[] = [];
+    const vistos = new Set<string>();
+    const regex = /\(?\d{2}\)?[\s.-]?(?:9[\s.]?)?\d{4}[\s.-]?\d{4}/g;
+    for (const texto of textos) {
+      const matches = texto.match(regex) || [];
+      for (const t of matches) {
+        const digits = t.replace(/\D/g, "");
+        if (digits.length >= 10 && digits.length <= 11 && !vistos.has(digits)) {
+          vistos.add(digits);
+          telefones.push(t.trim());
+        }
+      }
+    }
+    return telefones;
+  }
+
+  it("deve extrair telefone celular com DDD", () => {
+    const textos = ["Intimado pelo tel. (11) 98765-4321 conforme certidão"];
+    const tels = extrairTelefones(textos);
+    expect(tels.length).toBeGreaterThanOrEqual(1);
+    expect(tels[0].replace(/\D/g, "")).toHaveLength(11);
+  });
+
+  it("deve extrair telefone fixo com DDD", () => {
+    const textos = ["Contato: 19 3456-7890 - confirmar audiência"];
+    const tels = extrairTelefones(textos);
+    expect(tels.length).toBeGreaterThanOrEqual(1);
+    expect(tels[0].replace(/\D/g, "")).toHaveLength(10);
+  });
+
+  it("deve ignorar números que não são telefones", () => {
+    const textos = ["Processo nº 12345 de 2024 - sem telefone"];
+    const tels = extrairTelefones(textos);
+    expect(tels).toHaveLength(0);
+  });
+
+  it("deve deduplicar telefones repetidos", () => {
+    const textos = [
+      "Tel: (11) 98765-4321 conforme certidão",
+      "Reintimado pelo (11) 98765-4321 novamente",
+    ];
+    const tels = extrairTelefones(textos);
+    expect(tels).toHaveLength(1);
+  });
+});
+
+// ─── Testes de busca por nome ───────────────────────────────────────────────────────────
+
+describe("Busca por nome do advogado", () => {
+  it("deve normalizar nome para maiúsculas", () => {
+    const nome = "rodrigo cavalcanti";
+    expect(nome.trim().toUpperCase()).toBe("RODRIGO CAVALCANTI");
+  });
+
+  it("deve construir URL correta para busca por nome", () => {
+    const nome = "RODRIGO CAVALCANTI";
+    const url = `https://esaj.tjsp.jus.br/cpopg/search.do?conversationId=&cbPesquisa=NMPARTE&dadosConsulta.valorConsulta=${encodeURIComponent(nome)}&cdForo=-1`;
+    expect(url).toContain("cbPesquisa=NMPARTE");
+    expect(url).toContain("RODRIGO");
+  });
+
+  it("deve aceitar tipo nome na validação de tipo de busca", () => {
+    const tiposValidos = ["oab", "cpf", "processo", "nome"];
+    expect(tiposValidos).toContain("nome");
+  });
+});

@@ -382,6 +382,62 @@ export async function buscarPorNumero(numero: string): Promise<{ processos: Proc
   return buscarTodasPaginas(url, "NUMPROC", numLimpo, "-1");
 }
 
+export async function buscarPorNome(nome: string): Promise<{ processos: ProcessoResumo[]; totalEncontrados: number }> {
+  const nomeLimpo = nome.trim().toUpperCase();
+  const url = `${TJSP_BASE}/cpopg/search.do?conversationId=&cbPesquisa=NMPARTE&dadosConsulta.valorConsulta=${encodeURIComponent(nomeLimpo)}&cdForo=-1`;
+  return buscarTodasPaginas(url, "NMPARTE", nomeLimpo, "-1");
+}
+
+// ─── Filtro de processos indesejados ─────────────────────────────────────────
+const CLASSES_EXCLUIDAS = [
+  "usucapi",
+  "partilha",
+  "herança",
+  "inventário",
+  "divórcio",
+  "separação",
+  "alimentos",
+  "guarda",
+  "adoção",
+  "tutela",
+  "curatela",
+];
+
+const ASSUNTOS_EXCLUIDOS = [
+  "usucapi",
+  "partilha",
+  "herança",
+  "inventário",
+  "bem imóvel",
+  "bem móvel",
+  "sucessão",
+];
+
+const SITUACOES_EXCLUIDAS = [
+  "extinto",
+  "extinção",
+  "arquivado",
+  "arquivamento",
+  "suspenso por preso",
+  "preso",
+  "baixado",
+];
+
+export function filtrarProcessosIndesejados(processos: ProcessoResumo[]): ProcessoResumo[] {
+  return processos.filter(p => {
+    const classe = (p.classe || "").toLowerCase();
+    const assunto = (p.assunto || "").toLowerCase();
+
+    // Excluir por classe
+    if (CLASSES_EXCLUIDAS.some(c => classe.includes(c))) return false;
+
+    // Excluir por assunto
+    if (ASSUNTOS_EXCLUIDOS.some(a => assunto.includes(a))) return false;
+
+    return true;
+  });
+}
+
 export async function obterDetalheProcesso(
   codigoProcesso: string,
   foroProcesso: string

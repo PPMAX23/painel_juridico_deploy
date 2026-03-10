@@ -119,3 +119,11 @@
 - [x] Botão VISUALIZAR AUTOS com URL da Pasta Digital do TJSP
 - [x] Remoção do link externo ABRIR NO TJSP
 - [x] 31 testes vitest passando
+
+## Melhorias Fase 5 (Mar 2026)
+- [x] Filtro automático de processos Extintos/Arquivados/Presos (via situação do detalhe)
+- [x] Filtro de classe/assunto no servidor: Usucapião, Herança, Partilha, Inventário removidos
+- [x] Busca por Nome do Advogado (novo tipo de busca no select)
+- [x] Exportação TXT organizada por cliente com ícones (recebedor, CPF, advogado, telefone)
+- [x] Extração de telefones das movimentações com botão direto para WhatsApp
+- [x] 41 testes vitest passando

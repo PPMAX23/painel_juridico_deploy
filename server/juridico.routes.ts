@@ -4,6 +4,8 @@ import {
   buscarPorOAB,
   buscarPorCPFCNPJ,
   buscarPorNumero,
+  buscarPorNome,
+  filtrarProcessosIndesejados,
   obterDetalheProcesso,
   obterDocumento,
   setCookiesTJSP,
@@ -29,14 +31,24 @@ router.get("/buscar", async (req: Request, res: Response) => {
       resultado = await buscarPorCPFCNPJ(query);
     } else if (tipo === "processo") {
       resultado = await buscarPorNumero(query);
+    } else if (tipo === "nome") {
+      resultado = await buscarPorNome(query);
     } else {
       return res.status(400).json({ error: `Tipo de busca inválido: ${tipo}` });
     }
 
+    // Filtrar processos indesejados (usucapião, herança, partilha, etc.)
+    const processosFiltrados = filtrarProcessosIndesejados(resultado.processos);
+    const totalFiltrados = resultado.processos.length - processosFiltrados.length;
+    if (totalFiltrados > 0) {
+      console.log(`[TJSP] Filtrados ${totalFiltrados} processos indesejados`);
+    }
+
     return res.json({
-      total: resultado.processos.length,
+      total: processosFiltrados.length,
       totalEncontrados: resultado.totalEncontrados,
-      processos: resultado.processos,
+      totalFiltrados,
+      processos: processosFiltrados,
       fonte: "TJSP",
     });
   } catch (err: unknown) {

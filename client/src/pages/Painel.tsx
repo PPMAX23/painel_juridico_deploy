@@ -57,36 +57,76 @@ interface StatusTJSP {
 }
 
 // ─── Utilitários ──────────────────────────────────────────────────────────────
+function extrairTelefonesDeMovimentacoes(movimentacoes: MovimentacaoTJSP[]): string[] {
+  const telefones: string[] = [];
+  const vistos = new Set<string>();
+  const regex = /\(?\d{2}\)?[\s.-]?(?:9[\s.]?)?\d{4}[\s.-]?\d{4}/g;
+  for (const mov of movimentacoes) {
+    const matches = mov.descricao.match(regex) || [];
+    for (const t of matches) {
+      const digits = t.replace(/\D/g, "");
+      if (digits.length >= 10 && digits.length <= 11 && !vistos.has(digits)) {
+        vistos.add(digits);
+        telefones.push(t.trim());
+      }
+    }
+  }
+  return telefones;
+}
+
 function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
-  let txt = `RELATÓRIO DE PROCESSOS - TJSP\nDATA: ${new Date().toLocaleString("pt-BR")}\nTOTAL: ${processos.length}\n\n`;
-  txt += "=".repeat(80) + "\n";
-  processos.forEach((p) => {
-    txt += `\n${"=".repeat(50)}\n`;
-    txt += `PROCESSO: ${p.numeroProcesso}\n`;
-    txt += `${"=".repeat(50)}\n`;
-    if (p.classe) txt += `Classe: ${p.classe}\n`;
-    if (p.assunto) txt += `Assunto: ${p.assunto}\n`;
-    if (p.vara) txt += `Vara: ${p.vara}\n`;
-    if (p.juiz) txt += `Juiz: ${p.juiz}\n`;
-    if (p.valor) txt += `Valor: ${p.valor}\n`;
-    if (p.dataDistribuicao) txt += `Distribuicao: ${p.dataDistribuicao}\n`;
-    if (p.situacao) txt += `Situacao: ${p.situacao}\n`;
-    if (p.foro) txt += `Foro: ${p.foro}\n`;
-    if (p.partes && p.partes.length > 0) {
-      txt += `\nPARTES:\n`;
-      p.partes.forEach(parte => {
-        txt += `  [${parte.polo || parte.tipo || "Parte"}] ${parte.nome}\n`;
-        if (parte.advogado) txt += `    Advogado: ${parte.advogado}\n`;
-        if (parte.documento || parte.cpfCnpj) txt += `    Documento: ${parte.documento || parte.cpfCnpj}\n`;
-      });
+  const agora = new Date().toLocaleString("pt-BR");
+  let txt = `⚖️ RELATORIO DE PROCESSOS - TJSP\n`;
+  txt += `📅 DATA: ${agora}\n`;
+  txt += `📊 TOTAL: ${processos.length} processo(s)\n`;
+  txt += "=".repeat(60) + "\n\n";
+
+  processos.forEach((p, idx) => {
+    // Identificar partes
+    const partePassiva = p.partes?.find(pt => {
+      const t = (pt.polo || pt.tipo || "").toLowerCase();
+      return t.includes("execut") || t.includes("exectd") || t.includes("r\u00e9u") || t.includes("requerid") || t.includes("passiv");
+    }) || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
+    const parteAtiva = p.partes?.find(pt => {
+      const t = (pt.polo || pt.tipo || "").toLowerCase();
+      return t.includes("ativo") || t.includes("autor") || t.includes("exeqte") || t.includes("exequente") || t.includes("requerente");
+    }) || (p.partes && p.partes.length > 0 ? p.partes[0] : null);
+    const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+    const telefones = extrairTelefonesDeMovimentacoes(p.movimentacoes || []);
+
+    txt += `👤 CLIENTE ${idx + 1}\n`;
+    txt += "-".repeat(50) + "\n";
+    if (partePassiva) {
+      txt += `👤 Recebedor: ${partePassiva.nome}\n`;
+      if (partePassiva.documento || partePassiva.cpfCnpj) {
+        txt += `📝 CPF/CNPJ: ${partePassiva.documento || partePassiva.cpfCnpj}\n`;
+      }
     }
+    if (parteAtiva) {
+      txt += `🏢 Parte Ativa: ${parteAtiva.nome}\n`;
+    }
+    if (advogado) {
+      txt += `⚖️ Advogado: ${advogado.split(",")[0]}\n`;
+    }
+    if (telefones.length > 0) {
+      txt += `📱 Telefone(s): ${telefones.join(" | ")}\n`;
+    }
+    txt += `\n📄 PROCESSO: ${p.numeroProcesso}\n`;
+    if (p.classe) txt += `🏷️  Classe: ${p.classe}\n`;
+    if (p.assunto) txt += `📌 Assunto: ${p.assunto}\n`;
+    if (p.vara) txt += `🏛️  Vara: ${p.vara}\n`;
+    if (p.juiz) txt += `👨\u200d⚖️ Juiz: ${p.juiz}\n`;
+    if (p.valor) txt += `💰 Valor: ${p.valor}\n`;
+    if (p.dataDistribuicao) txt += `📅 Distribuicao: ${p.dataDistribuicao}\n`;
+    if (p.situacao) txt += `🟢 Situacao: ${p.situacao}\n`;
+    if (p.foro) txt += `📍 Foro: ${p.foro}\n`;
     if (p.movimentacoes && p.movimentacoes.length > 0) {
-      txt += `\nULTIMAS MOVIMENTACOES:\n`;
+      txt += `\n🗓️  ULTIMAS MOVIMENTACOES:\n`;
       p.movimentacoes.slice(0, 5).forEach(mov => {
-        txt += `  ${mov.data}: ${mov.descricao}\n`;
+        txt += `   ▶ ${mov.data}: ${mov.descricao}\n`;
       });
     }
-    txt += "\n" + "-".repeat(80) + "\n";
+    txt += "\n" + "=".repeat(60) + "\n\n";
   });
   return txt;
 }
@@ -117,7 +157,7 @@ function downloadTxt(conteudo: string, nomeArquivo: string) {
 
 // ─── Componente Principal ─────────────────────────────────────────────────────
 export default function Painel() {
-  const [tipoBusca, setTipoBusca] = useState<"processo" | "cpf" | "oab">("oab");
+  const [tipoBusca, setTipoBusca] = useState<"processo" | "cpf" | "oab" | "nome">("oab");
   const [query, setQuery] = useState("");
   const [carregando, setCarregando] = useState(false);
 
@@ -181,6 +221,15 @@ export default function Painel() {
   // Processos filtrados e ordenados (usando useMemo, sem mutação)
   const processosFiltrados = useMemo(() => {
     let resultado = processos;
+
+    // Filtro automático: quando filtro = "todos", ocultar processos extintos/arquivados/presos já carregados
+    if (filtroStatus === "todos") {
+      resultado = resultado.filter(p => {
+        if (!p.detalheCarregado || !p.situacao) return true; // manter se ainda não carregado
+        const sit = p.situacao.toLowerCase();
+        return !sit.includes("extint") && !sit.includes("arquivad") && !sit.includes("baixad") && !sit.includes("preso");
+      });
+    }
 
     if (filtroStatus === "ativos") {
       resultado = resultado.filter(p =>
@@ -515,12 +564,13 @@ export default function Painel() {
           <div className="flex gap-3 flex-wrap">
             <select
               value={tipoBusca}
-              onChange={e => setTipoBusca(e.target.value as "processo" | "cpf" | "oab")}
+              onChange={e => setTipoBusca(e.target.value as "processo" | "cpf" | "oab" | "nome")}
               className="bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 cursor-pointer"
             >
               <option value="oab">OAB</option>
               <option value="cpf">CPF / CNPJ</option>
               <option value="processo">Nº Processo</option>
+              <option value="nome">Nome do Advogado</option>
             </select>
 
             <input
@@ -531,6 +581,7 @@ export default function Painel() {
               placeholder={
                 tipoBusca === "oab" ? "Ex: 200287 ou SP200.287" :
                 tipoBusca === "cpf" ? "Ex: 123.456.789-00 ou 12.345.678/0001-00" :
+                tipoBusca === "nome" ? "Ex: RODRIGO CAVALCANTI" :
                 "Ex: 1234567-89.2023.8.26.0100"
               }
               className="flex-1 min-w-[200px] bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 placeholder-gray-600"
@@ -718,6 +769,31 @@ export default function Painel() {
                   Carregando detalhes do TJSP...
                 </div>
               )}
+
+              {/* Telefones extraídos das movimentações */}
+              {processoAberto.movimentacoes && processoAberto.movimentacoes.length > 0 && (() => {
+                const tels = extrairTelefonesDeMovimentacoes(processoAberto.movimentacoes);
+                if (tels.length === 0) return null;
+                return (
+                  <div className="bg-[#0f1f1a] border border-emerald-900/40 rounded-xl p-4">
+                    <h3 className="text-xs font-bold text-emerald-400 tracking-wider mb-3">📱 TELEFONES ENCONTRADOS NOS AUTOS</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {tels.map((tel, i) => (
+                        <a
+                          key={`tel-${i}`}
+                          href={`https://wa.me/55${tel.replace(/\D/g, "")}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-400 rounded-lg text-xs font-mono font-semibold flex items-center gap-1.5 transition-all"
+                        >
+                          📱 {tel}
+                        </a>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-600 mt-2">Clique para abrir no WhatsApp</p>
+                  </div>
+                );
+              })()}
 
               {/* Dados do Processo */}
               <div className="bg-[#111128] rounded-xl p-4 space-y-2">
