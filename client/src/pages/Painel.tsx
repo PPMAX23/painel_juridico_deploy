@@ -1,12 +1,14 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 
 // ─── Tipos TJSP ───────────────────────────────────────────────────────────────
 interface ParteTJSP {
-  polo: string;
+  polo?: string;
+  tipo?: string;
   nome: string;
   advogado: string;
-  documento: string;
+  documento?: string;
+  cpfCnpj?: string;
 }
 
 interface MovimentacaoTJSP {
@@ -15,7 +17,8 @@ interface MovimentacaoTJSP {
 }
 
 interface DocumentoTJSP {
-  nome: string;
+  nome?: string;
+  titulo?: string;
   url: string;
 }
 
@@ -32,19 +35,23 @@ interface ProcessoTJSP {
   partes: ParteTJSP[];
   movimentacoes: MovimentacaoTJSP[];
   documentos: DocumentoTJSP[];
-  incidentes: { descricao: string; url: string }[];
   tribunal: string;
-  fonte: string;
   codigoProcesso?: string;
   foroProcesso?: string;
   urlDetalhe?: string;
   detalheCarregado?: boolean;
+  data?: string;
 }
 
 interface ResultadoBusca {
   total: number;
   processos: ProcessoTJSP[];
-  pagina: number;
+}
+
+interface StatusTJSP {
+  autenticado: boolean;
+  expiracao: string | null;
+  tempoRestante: string | null;
 }
 
 // ─── Utilitários ──────────────────────────────────────────────────────────────
@@ -66,9 +73,9 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
     if (p.partes && p.partes.length > 0) {
       txt += `\nPARTES:\n`;
       p.partes.forEach(parte => {
-        txt += `  [${parte.polo || "Parte"}] ${parte.nome}\n`;
+        txt += `  [${parte.polo || parte.tipo || "Parte"}] ${parte.nome}\n`;
         if (parte.advogado) txt += `    Advogado: ${parte.advogado}\n`;
-        if (parte.documento) txt += `    Documento: ${parte.documento}\n`;
+        if (parte.documento || parte.cpfCnpj) txt += `    Documento: ${parte.documento || parte.cpfCnpj}\n`;
       });
     }
     if (p.movimentacoes && p.movimentacoes.length > 0) {
@@ -98,7 +105,6 @@ function downloadTxt(conteudo: string, nomeArquivo: string) {
   link.style.left = "-9999px";
   document.body.appendChild(link);
   link.click();
-  // Aguardar um tick antes de remover para garantir que o clique foi processado
   setTimeout(() => {
     if (link.parentNode === document.body) {
       document.body.removeChild(link);
@@ -134,6 +140,37 @@ export default function Painel() {
   // Detalhe carregando
   const [detalheCarregando, setDetalheCarregando] = useState(false);
 
+  // Status TJSP
+  const [statusTJSP, setStatusTJSP] = useState<StatusTJSP>({ autenticado: false, expiracao: null, tempoRestante: null });
+  const [modalCookies, setModalCookies] = useState(false);
+  const [cookiesInput, setCookiesInput] = useState("");
+  const [configurandoCookies, setConfigurandoCookies] = useState(false);
+
+  // Verificar status TJSP ao iniciar
+  useEffect(() => {
+    fetch("/api/tjsp/status")
+      .then(r => r.json())
+      .then(data => {
+        setStatusTJSP({
+          autenticado: data.autenticado,
+          expiracao: data.expiracao,
+          tempoRestante: data.tempoRestante,
+        });
+        // Se não autenticado, tentar auto-login
+        if (!data.autenticado) {
+          fetch("/api/tjsp/auto-login", { method: "POST" })
+            .then(r => r.json())
+            .then(d => {
+              if (d.ok) {
+                setStatusTJSP({ autenticado: true, expiracao: d.expiracao, tempoRestante: d.tempoRestante });
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Lista de processos derivada do mapa (sem mutação)
   const processos = useMemo(() => {
     return processosOrdem.map(id => processosMap.get(id)).filter(Boolean) as ProcessoTJSP[];
@@ -154,7 +191,6 @@ export default function Painel() {
     }
 
     if (ordenarMaiorValor) {
-      // Criar nova cópia antes de ordenar — nunca mutar o array original
       resultado = [...resultado].sort((a, b) => parseValor(b.valor) - parseValor(a.valor));
     }
 
@@ -182,7 +218,9 @@ export default function Painel() {
       if (!resp.ok) {
         const errData = await resp.json().catch(() => ({}));
         if (errData.error === "SESSAO_EXPIRADA") {
-          toast.error("Sessão do TJSP expirada. Recarregue a página.");
+          setStatusTJSP({ autenticado: false, expiracao: null, tempoRestante: null });
+          setModalCookies(true);
+          toast.error("Sessão do TJSP expirada. Configure os cookies de sessão.");
         } else {
           throw new Error(errData.error || `Erro ${resp.status}`);
         }
@@ -225,12 +263,16 @@ export default function Painel() {
     const id = p.numeroProcesso;
     setProcessoAbertoId(id);
 
-    if (p.detalheCarregado || !p.urlDetalhe) return;
+    if (p.detalheCarregado || !p.codigoProcesso) return;
 
     setDetalheCarregando(true);
 
     try {
-      const resp = await fetch(`/api/processo/detalhe?url=${encodeURIComponent(p.urlDetalhe)}`);
+      const params = new URLSearchParams({
+        codigo: p.codigoProcesso || "",
+        foro: p.foroProcesso || "",
+      });
+      const resp = await fetch(`/api/processo/detalhe?${params}`);
       if (!resp.ok) throw new Error(`Erro ${resp.status}`);
       const detalhe: ProcessoTJSP = await resp.json();
 
@@ -255,6 +297,34 @@ export default function Painel() {
     }
   }, []);
 
+  const configurarCookies = useCallback(async () => {
+    if (!cookiesInput.trim()) {
+      toast.error("Cole os cookies do TJSP");
+      return;
+    }
+    setConfigurandoCookies(true);
+    try {
+      const resp = await fetch("/api/tjsp/cookies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookies: cookiesInput.trim(), ttlHoras: 8 }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setStatusTJSP({ autenticado: true, expiracao: data.expiracao, tempoRestante: data.tempoRestante });
+        setModalCookies(false);
+        setCookiesInput("");
+        toast.success("Cookies configurados! Sessão válida por 8 horas.");
+      } else {
+        toast.error(data.error || "Erro ao configurar cookies");
+      }
+    } catch (err: unknown) {
+      toast.error("Erro: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setConfigurandoCookies(false);
+    }
+  }, [cookiesInput]);
+
   const copiarRelatorio = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
     navigator.clipboard.writeText(txt).then(() => toast.success("Relatório copiado!"));
@@ -262,8 +332,8 @@ export default function Painel() {
 
   const exportarTxt = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
-    const data = new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
-    downloadTxt(txt, `processos_${query}_${data}.txt`);
+    const dataStr = new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
+    downloadTxt(txt, `processos_${query}_${dataStr}.txt`);
     toast.success("Arquivo exportado!");
   }, [processosFiltrados, query]);
 
@@ -382,10 +452,23 @@ export default function Painel() {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-xs text-emerald-400">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>TJSP CONECTADO</span>
-            </div>
+            {statusTJSP.autenticado ? (
+              <div className="flex items-center gap-2 text-xs text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>TJSP CONECTADO</span>
+                {statusTJSP.tempoRestante && (
+                  <span className="text-gray-500">({statusTJSP.tempoRestante})</span>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => setModalCookies(true)}
+                className="flex items-center gap-2 text-xs text-red-400 hover:text-red-300 transition-colors"
+              >
+                <span className="w-2 h-2 rounded-full bg-red-400"></span>
+                <span>TJSP DESCONECTADO — Configurar</span>
+              </button>
+            )}
             <div className="text-xs text-gray-500">
               Rodrigo Cavalcanti — OAB/SP 200.287
             </div>
@@ -439,7 +522,7 @@ export default function Painel() {
           {carregando && (
             <div className="mt-4 flex items-center gap-3 text-sm text-indigo-400">
               <span className="w-4 h-4 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin"></span>
-              Consultando Bases Nacionais Seguras... Aguarde, isso pode levar até 60 segundos.
+              Consultando TJSP diretamente... Aguarde, isso pode levar até 30 segundos.
             </div>
           )}
         </div>
@@ -523,16 +606,16 @@ export default function Painel() {
                       {p.assunto && (
                         <p className="text-sm text-gray-300 truncate">{p.assunto}</p>
                       )}
-                      {p.vara && (
-                        <p className="text-xs text-gray-500 mt-1 truncate">🏛️ {p.vara}</p>
+                      {(p.vara || p.foro) && (
+                        <p className="text-xs text-gray-500 mt-1 truncate">🏛️ {p.vara || p.foro}</p>
                       )}
                     </div>
                     <div className="text-right shrink-0">
                       {p.valor && (
                         <p className="text-sm font-semibold text-emerald-400">{p.valor}</p>
                       )}
-                      {p.dataDistribuicao && (
-                        <p className="text-xs text-gray-500 mt-1">{p.dataDistribuicao}</p>
+                      {(p.dataDistribuicao || p.data) && (
+                        <p className="text-xs text-gray-500 mt-1">{p.dataDistribuicao || p.data}</p>
                       )}
                       <span className="text-xs text-indigo-400 mt-2 block">Ver detalhes →</span>
                     </div>
@@ -603,24 +686,29 @@ export default function Painel() {
                 <div className="bg-[#111128] rounded-xl p-4">
                   <h3 className="text-xs font-bold text-gray-400 tracking-wider mb-3">PARTES DO PROCESSO</h3>
                   <div className="space-y-3">
-                    {processoAberto.partes.map((parte, i) => (
-                      <div key={`parte-${i}`} className="border border-[#1e1e2e] rounded-lg p-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                            parte.polo?.toLowerCase().includes("ativo") || parte.polo?.toLowerCase().includes("autor") || parte.polo?.toLowerCase().includes("exequente")
-                              ? "bg-emerald-900/40 text-emerald-400"
-                              : "bg-red-900/40 text-red-400"
-                          }`}>
-                            {parte.polo || "PARTE"}
-                          </span>
+                    {processoAberto.partes.map((parte, i) => {
+                      const tipoStr = (parte.polo || parte.tipo || "").toLowerCase();
+                      const isAtivo = tipoStr.includes("ativo") || tipoStr.includes("autor") ||
+                        tipoStr.includes("exeqte") || tipoStr.includes("exequente") || tipoStr.includes("requerente");
+                      return (
+                        <div key={`parte-${i}`} className="border border-[#1e1e2e] rounded-lg p-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              isAtivo ? "bg-emerald-900/40 text-emerald-400" : "bg-red-900/40 text-red-400"
+                            }`}>
+                              {parte.polo || parte.tipo || "PARTE"}
+                            </span>
+                          </div>
+                          <p className="text-sm text-white font-semibold">{parte.nome}</p>
+                          {(parte.documento || parte.cpfCnpj) && (
+                            <p className="text-xs text-gray-500 mt-0.5">Doc: {parte.documento || parte.cpfCnpj}</p>
+                          )}
+                          {parte.advogado && (
+                            <p className="text-xs text-indigo-400 mt-1">⚖️ Adv: {parte.advogado}</p>
+                          )}
                         </div>
-                        <p className="text-sm text-white font-semibold">{parte.nome}</p>
-                        {parte.documento && <p className="text-xs text-gray-500 mt-0.5">Doc: {parte.documento}</p>}
-                        {parte.advogado && (
-                          <p className="text-xs text-indigo-400 mt-1">⚖️ Adv: {parte.advogado}</p>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -657,7 +745,7 @@ export default function Painel() {
                         rel="noopener noreferrer"
                         className="flex items-center gap-2 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
                       >
-                        📄 {doc.nome}
+                        📄 {doc.titulo || doc.nome || "Documento"}
                       </a>
                     ))}
                   </div>
@@ -770,6 +858,57 @@ export default function Painel() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configuração de Cookies */}
+      {modalCookies && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+          <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-4 border-b border-[#1e1e2e]">
+              <h3 className="font-bold text-sm text-yellow-400 tracking-wider">🔑 CONFIGURAR SESSÃO TJSP</h3>
+              <button
+                onClick={() => setModalCookies(false)}
+                className="text-gray-500 hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1a1a2e]"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="bg-[#111128] rounded-xl p-3 text-xs text-gray-400 space-y-2">
+                <p className="font-semibold text-yellow-400">Como obter os cookies do TJSP:</p>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>Acesse <a href="https://esaj.tjsp.jus.br/cpopg/open.do" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">esaj.tjsp.jus.br</a> e faça login</li>
+                  <li>Pressione F12 para abrir o DevTools</li>
+                  <li>Vá em Application → Cookies → esaj.tjsp.jus.br</li>
+                  <li>Copie o valor de <code className="bg-[#1a1a2e] px-1 rounded">JSESSIONID</code> e <code className="bg-[#1a1a2e] px-1 rounded">K-JSESSIONID-*</code></li>
+                  <li>Cole no formato: <code className="bg-[#1a1a2e] px-1 rounded">JSESSIONID=abc; K-JSESSIONID-xxx=yyy</code></li>
+                </ol>
+              </div>
+              <textarea
+                value={cookiesInput}
+                onChange={e => setCookiesInput(e.target.value)}
+                placeholder="Cole os cookies aqui: JSESSIONID=abc123; K-JSESSIONID-xxx=yyy..."
+                rows={4}
+                className="w-full bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-3 text-xs focus:outline-none focus:border-indigo-500 placeholder-gray-600 font-mono resize-none"
+              />
+              <div className="flex gap-3">
+                <button
+                  onClick={configurarCookies}
+                  disabled={configurandoCookies}
+                  className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
+                >
+                  {configurandoCookies ? "Configurando..." : "✅ SALVAR COOKIES"}
+                </button>
+                <button
+                  onClick={() => setModalCookies(false)}
+                  className="px-6 py-3 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-400 rounded-xl text-sm transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

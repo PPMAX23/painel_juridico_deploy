@@ -1,49 +1,16 @@
 import { Router, Request, Response } from "express";
 import { invokeLLM } from "./_core/llm";
-import { spawn } from "child_process";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  buscarPorOAB,
+  buscarPorCPFCNPJ,
+  buscarPorNumero,
+  obterDetalheProcesso,
+  setCookiesTJSP,
+  statusCookies,
+  garantirCookies,
+} from "./tjsp-http.service";
 
 const router = Router();
-
-// ─── Função auxiliar: executar o scraper Puppeteer do TJSP ───────────────────
-function executarScraperTJSP(tipo: string, valor: string): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, "tjsp-puppeteer.cjs");
-    const proc = spawn("node", [scriptPath, tipo, valor], {
-      timeout: 120000,
-      env: { ...process.env, NODE_PATH: path.join(__dirname, "../node_modules") },
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    proc.stdout.on("data", (data: Buffer) => { stdout += data.toString(); });
-    proc.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
-
-    proc.on("close", (code: number) => {
-      if (code === 0 && stdout.trim()) {
-        try {
-          resolve(JSON.parse(stdout.trim()));
-        } catch {
-          reject(new Error(`JSON inválido: ${stdout.substring(0, 200)}`));
-        }
-      } else {
-        try {
-          const errObj = JSON.parse(stderr.trim() || stdout.trim());
-          reject(new Error(errObj.error || `Código ${code}`));
-        } catch {
-          reject(new Error(stderr.substring(0, 300) || `Processo encerrou com código ${code}`));
-        }
-      }
-    });
-
-    proc.on("error", (err: Error) => reject(err));
-  });
-}
 
 // ─── Busca principal (OAB, CPF/CNPJ, Nº Processo) ────────────────────────────
 router.get("/buscar", async (req: Request, res: Response) => {
@@ -54,15 +21,29 @@ router.get("/buscar", async (req: Request, res: Response) => {
   }
 
   try {
-    let tipoTJSP = tipo;
-    if (tipo === "cpf" || tipo === "cnpj") tipoTJSP = "documento";
-    
-    const resultado = await executarScraperTJSP(tipoTJSP, query);
-    return res.json(resultado);
+    let processos;
+    if (tipo === "oab") {
+      processos = await buscarPorOAB(query);
+    } else if (tipo === "cpf" || tipo === "cnpj" || tipo === "documento") {
+      processos = await buscarPorCPFCNPJ(query);
+    } else if (tipo === "processo") {
+      processos = await buscarPorNumero(query);
+    } else {
+      return res.status(400).json({ error: `Tipo de busca inválido: ${tipo}` });
+    }
+
+    return res.json({
+      total: processos.length,
+      processos,
+      fonte: "TJSP",
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg === "SESSAO_EXPIRADA") {
-      return res.status(401).json({ error: "SESSAO_EXPIRADA", mensagem: "Sessão do TJSP expirada. Faça login novamente." });
+    if (msg === "TJSP_SEM_AUTENTICACAO" || msg === "SESSAO_EXPIRADA") {
+      return res.status(401).json({
+        error: "SESSAO_EXPIRADA",
+        mensagem: "Sessão do TJSP expirada. Configure os cookies de sessão.",
+      });
     }
     console.error("[TJSP Buscar]", msg);
     return res.status(500).json({ error: msg });
@@ -71,17 +52,29 @@ router.get("/buscar", async (req: Request, res: Response) => {
 
 // ─── Detalhe de processo ──────────────────────────────────────────────────────
 router.get("/processo/detalhe", async (req: Request, res: Response) => {
-  const { url } = req.query as { url: string };
-
-  if (!url) {
-    return res.status(400).json({ error: "Parâmetro url é obrigatório" });
-  }
+  const { codigo, foro, url } = req.query as { codigo?: string; foro?: string; url?: string };
 
   try {
-    const resultado = await executarScraperTJSP("detalhe", url);
-    return res.json(resultado);
+    let detalhe;
+    if (codigo && foro) {
+      detalhe = await obterDetalheProcesso(codigo, foro);
+    } else if (url) {
+      // Extrair código e foro da URL
+      const codigoMatch = url.match(/processo\.codigo=([^&]+)/);
+      const foroMatch = url.match(/processo\.foro=([^&]+)/);
+      if (!codigoMatch || !foroMatch) {
+        return res.status(400).json({ error: "URL inválida: não foi possível extrair código e foro" });
+      }
+      detalhe = await obterDetalheProcesso(codigoMatch[1], foroMatch[1]);
+    } else {
+      return res.status(400).json({ error: "Parâmetros codigo+foro ou url são obrigatórios" });
+    }
+    return res.json(detalhe);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "TJSP_SEM_AUTENTICACAO" || msg === "SESSAO_EXPIRADA") {
+      return res.status(401).json({ error: "SESSAO_EXPIRADA" });
+    }
     console.error("[TJSP Detalhe]", msg);
     return res.status(500).json({ error: msg });
   }
@@ -89,14 +82,33 @@ router.get("/processo/detalhe", async (req: Request, res: Response) => {
 
 // ─── Status da sessão TJSP ────────────────────────────────────────────────────
 router.get("/tjsp/status", async (_req: Request, res: Response) => {
+  const status = statusCookies();
+  return res.json({ ...status, fonte: "TJSP", timestamp: new Date().toISOString() });
+});
+
+// ─── Configurar cookies manualmente ──────────────────────────────────────────
+router.post("/tjsp/cookies", async (req: Request, res: Response) => {
+  const { cookies, ttlHoras } = req.body as { cookies: string; ttlHoras?: number };
+
+  if (!cookies || typeof cookies !== "string" || cookies.trim().length < 10) {
+    return res.status(400).json({ error: "Cookies inválidos ou muito curtos" });
+  }
+
+  const ttlMs = (ttlHoras || 4) * 60 * 60 * 1000;
+  setCookiesTJSP(cookies.trim(), ttlMs);
+  const status = statusCookies();
+  return res.json({ ok: true, ...status });
+});
+
+// ─── Auto-capturar cookies via Puppeteer (apenas sandbox) ────────────────────
+router.post("/tjsp/auto-login", async (_req: Request, res: Response) => {
   try {
-    // Fazer uma busca rápida para verificar se a sessão está ativa
-    const resultado = await executarScraperTJSP("oab", "200287") as { total?: number; processos?: unknown[] };
-    const ok = resultado && (resultado.total || 0) > 0;
-    return res.json({ autenticado: ok, fonte: "TJSP", timestamp: new Date().toISOString() });
+    await garantirCookies();
+    const status = statusCookies();
+    return res.json({ ok: true, ...status });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    return res.json({ autenticado: false, erro: msg, fonte: "TJSP" });
+    return res.status(500).json({ error: msg });
   }
 });
 
@@ -123,7 +135,7 @@ Data de Distribuição: ${processo.dataDistribuicao || "N/A"}
 Situação: ${processo.situacao || "N/A"}
 
 PARTES:
-${(processo.partes || []).map((p: { polo: string; nome: string; advogado: string }) => `- [${p.polo || "Parte"}] ${p.nome}${p.advogado ? ` | Adv: ${p.advogado}` : ""}`).join("\n") || "N/A"}
+${(processo.partes || []).map((p: { polo?: string; tipo?: string; nome: string; advogado?: string }) => `- [${p.polo || p.tipo || "Parte"}] ${p.nome}${p.advogado ? ` | Adv: ${p.advogado}` : ""}`).join("\n") || "N/A"}
 
 ÚLTIMAS MOVIMENTAÇÕES:
 ${(processo.movimentacoes || []).slice(0, 10).map((m: { data: string; descricao: string }) => `- ${m.data}: ${m.descricao}`).join("\n") || "N/A"}
@@ -162,7 +174,7 @@ ASSUNTO: ${processo.assunto || "N/A"}
 VARA: ${processo.vara || "N/A"}
 JUIZ: ${processo.juiz || "N/A"}
 VALOR: ${processo.valor || "N/A"}
-PARTES: ${(processo.partes || []).map((p: { polo: string; nome: string }) => `${p.polo}: ${p.nome}`).join(" | ") || "N/A"}
+PARTES: ${(processo.partes || []).map((p: { polo?: string; tipo?: string; nome: string }) => `${p.polo || p.tipo}: ${p.nome}`).join(" | ") || "N/A"}
 ÚLTIMA MOVIMENTAÇÃO: ${processo.movimentacoes?.[0] ? `${processo.movimentacoes[0].data}: ${processo.movimentacoes[0].descricao}` : "N/A"}`;
 
     const resultado = await invokeLLM({ messages: [{ role: "user", content: prompt }], maxTokens: 500 });
@@ -221,7 +233,7 @@ ASSUNTO: ${processo.assunto || "N/A"}
 VARA: ${processo.vara || "N/A"}
 JUIZ: ${processo.juiz || "N/A"}
 VALOR: ${processo.valor || "N/A"}
-PARTES: ${(processo.partes || []).map((p: { polo: string; nome: string }) => `${p.polo}: ${p.nome}`).join(" | ") || "N/A"}
+PARTES: ${(processo.partes || []).map((p: { polo?: string; tipo?: string; nome: string }) => `${p.polo || p.tipo}: ${p.nome}`).join(" | ") || "N/A"}
 ADVOGADO: ${advogado || "Rodrigo Cavalcanti Alves Silva - OAB/SP 200.287"}
 
 Gere um ofício formal com:

@@ -97,3 +97,17 @@
 - [x] Modal de detalhe com carregamento lazy
 - [x] Indicador "TJSP CONECTADO" no header
 - [x] Sem tela de login/renovação de token
+
+## Migração para HTTP Direto (Fase 3 - Fix Produção)
+- [x] Substituir Puppeteer por scraping HTTP direto com cheerio
+- [x] Serviço tjsp-http.service.ts com parser de lista e detalhe
+- [x] Parser preciso de classe, assunto, vara, foro, data da lista
+- [x] Parser preciso de partes, movimentações, documentos do detalhe
+- [x] Endpoint POST /api/tjsp/cookies para configurar sessão manualmente
+- [x] Endpoint POST /api/tjsp/auto-login (sem Puppeteer)
+- [x] Endpoint GET /api/tjsp/status com tempo restante
+- [x] Modal de configuração de cookies no frontend
+- [x] Indicador de status TJSP com tempo restante no header
+- [x] Endpoint /api/processo/detalhe aceita codigo+foro ou url
+- [x] Frontend atualizado para usar campos tipo/cpfCnpj/titulo dos novos tipos
+- [x] 30 testes vitest passando
