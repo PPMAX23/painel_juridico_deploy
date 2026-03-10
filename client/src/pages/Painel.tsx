@@ -237,7 +237,10 @@ export default function Painel() {
     const a = document.createElement("a");
     a.href = url;
     a.download = `processos_${query}_${new Date().toLocaleDateString("pt-BR").replace(/\//g, "-")}.txt`;
+    a.style.display = "none";
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
     toast.success("Arquivo exportado!");
   };
@@ -488,7 +491,7 @@ export default function Painel() {
             ) : (
               processosFiltrados.map((p, idx) => (
                 <div
-                  key={`${p.numeroProcesso}-${idx}`}
+                  key={`proc-${idx}-${p.numeroProcesso}`}
                   className="bg-[#0d0d1a] border border-[#1e1e2e] hover:border-indigo-800 rounded-xl p-4 cursor-pointer transition-all duration-200 hover:bg-[#111128]"
                   onClick={() => abrirProcesso(p)}
                 >
@@ -668,7 +671,11 @@ export default function Painel() {
                       const a = document.createElement("a");
                       a.href = url;
                       a.download = `processo_${processoAberto.numeroProcesso}.txt`;
+                      a.style.display = "none";
+                      document.body.appendChild(a);
                       a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
                     }}
                     className="px-3 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
                   >
