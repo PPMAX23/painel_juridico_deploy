@@ -1321,36 +1321,92 @@ export default function Painel() {
               </div>
 
               {/* Partes */}
-              {processoAberto.partes && processoAberto.partes.length > 0 && (
-                <div className="bg-[#111128] rounded-xl p-4">
-                  <h3 className="text-xs font-bold text-gray-400 tracking-wider mb-3">PARTES DO PROCESSO</h3>
-                  <div className="space-y-3">
-                    {processoAberto.partes.map((parte, i) => {
-                      const tipoStr = (parte.polo || parte.tipo || "").toLowerCase();
-                      const isAtivo = tipoStr.includes("ativo") || tipoStr.includes("autor") ||
-                        tipoStr.includes("exeqte") || tipoStr.includes("exequente") || tipoStr.includes("requerente");
-                      return (
-                        <div key={`parte-${i}`} className="border border-[#1e1e2e] rounded-lg p-3">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                              isAtivo ? "bg-emerald-900/40 text-emerald-400" : "bg-red-900/40 text-red-400"
-                            }`}>
-                              {parte.polo || parte.tipo || "PARTE"}
-                            </span>
+              {processoAberto.partes && processoAberto.partes.length > 0 && (() => {
+                // Mapeamento de descrições por tipo de polo
+                const descricaoPolo: Record<string, { descricao: string; papel: string; cor: string; bg: string }> = {
+                  reqte:    { descricao: "quem entrou com o processo, fazendo o pedido à Justiça", papel: "Requerente / Autor da ação", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  reqda:    { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerida / Ré", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  reqdo:    { descricao: "a pessoa que está sendo processada e precisa responder ao pedido", papel: "Requerido / Réu", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  exeqte:   { descricao: "quem está executando a dívida ou o título judicial", papel: "Exequente / Credor", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  exectdo:  { descricao: "quem deve pagar ou cumprir a obrigação determinada pela Justiça", papel: "Executado / Devedor", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  autor:    { descricao: "quem iniciou a ação judicial", papel: "Autor da Ação", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                  réu:     { descricao: "quem está sendo processado e deve se defender", papel: "Réu / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  ré:      { descricao: "quem está sendo processada e deve se defender", papel: "Ré / Parte Passiva", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  impetrado: { descricao: "a autoridade ou entidade que praticou o ato questionado no mandado", papel: "Impetrado", cor: "text-orange-400", bg: "bg-orange-900/30 border-orange-700/40" },
+                  reclamado: { descricao: "quem está sendo reclamado na ação trabalhista", papel: "Reclamado", cor: "text-red-400", bg: "bg-red-900/30 border-red-700/40" },
+                  reclamante: { descricao: "quem abriu a reclamação trabalhista", papel: "Reclamante", cor: "text-emerald-400", bg: "bg-emerald-900/30 border-emerald-700/40" },
+                };
+                const numerais = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣"];
+                return (
+                  <div className="bg-[#111128] rounded-xl p-4">
+                    <h3 className="text-xs font-bold text-gray-400 tracking-wider mb-4">PARTES DO PROCESSO</h3>
+                    <div className="space-y-4">
+                      {processoAberto.partes.map((parte, i) => {
+                        const tipoRaw = (parte.polo || parte.tipo || "").toLowerCase().trim();
+                        const info = descricaoPolo[tipoRaw] || {
+                          descricao: "participa do processo nesta qualidade",
+                          papel: parte.polo || parte.tipo || "Parte",
+                          cor: "text-gray-400",
+                          bg: "bg-gray-800/30 border-gray-700/40",
+                        };
+                        // Separar advogados por vírgula ou ponto e vírgula
+                        const advogados = parte.advogado
+                          ? parte.advogado.split(/[,;]/).map(a => a.trim()).filter(Boolean)
+                          : [];
+                        return (
+                          <div key={`parte-${i}`} className={`border rounded-xl p-4 ${info.bg}`}>
+                            {/* Cabeçalho da parte */}
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-lg">{numerais[i] || `${i+1}.`}</span>
+                              <div>
+                                <span className={`text-xs font-bold tracking-wider uppercase ${info.cor}`}>
+                                  {parte.polo || parte.tipo || "PARTE"}
+                                </span>
+                                <span className="text-xs text-gray-500 ml-2">({info.papel})</span>
+                              </div>
+                            </div>
+
+                            {/* Nome da parte */}
+                            <p className="text-base font-bold text-white mb-1">{parte.nome}</p>
+
+                            {/* Descrição do papel */}
+                            <p className="text-xs text-gray-400 mb-2">
+                              É {info.descricao}.
+                            </p>
+
+                            {/* Documento se disponível */}
+                            {(parte.documento || parte.cpfCnpj) && (
+                              <p className="text-xs text-gray-500 mb-2">
+                                📄 Doc: {parte.documento || parte.cpfCnpj}
+                              </p>
+                            )}
+
+                            {/* Advogados da parte */}
+                            {advogados.length > 0 && (
+                              <div className="mt-2 pt-2 border-t border-white/10">
+                                <p className="text-xs text-gray-500 mb-1">
+                                  {advogados.length === 1
+                                    ? `Advogado${tipoRaw.includes("da") || tipoRaw.includes("reqda") || tipoRaw.includes("ré") ? "a" : ""} d${tipoRaw.includes("da") || tipoRaw.includes("reqda") ? "a" : "o"} ${info.papel.split(" ")[0]}:`
+                                    : `Advogados d${tipoRaw.includes("da") || tipoRaw.includes("reqda") ? "a" : "o"} ${info.papel.split(" ")[0]}:`
+                                  }
+                                </p>
+                                <div className="space-y-1">
+                                  {advogados.map((adv, j) => (
+                                    <div key={`adv-${j}`} className="flex items-center gap-1.5">
+                                      <span className="text-indigo-400 text-xs">⚖️</span>
+                                      <span className="text-xs text-indigo-300 font-medium">{adv}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          <p className="text-sm text-white font-semibold">{parte.nome}</p>
-                          {(parte.documento || parte.cpfCnpj) && (
-                            <p className="text-xs text-gray-500 mt-0.5">Doc: {parte.documento || parte.cpfCnpj}</p>
-                          )}
-                          {parte.advogado && (
-                            <p className="text-xs text-indigo-400 mt-1">⚖️ Adv: {parte.advogado}</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Movimentações */}
               {processoAberto.movimentacoes && processoAberto.movimentacoes.length > 0 && (
