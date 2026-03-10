@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 
 // ─── Tipos TJSP ───────────────────────────────────────────────────────────────
@@ -38,7 +38,6 @@ interface ProcessoTJSP {
   codigoProcesso?: string;
   foroProcesso?: string;
   urlDetalhe?: string;
-  // Detalhe carregado
   detalheCarregado?: boolean;
 }
 
@@ -52,20 +51,18 @@ interface ResultadoBusca {
 function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
   let txt = `RELATÓRIO DE PROCESSOS - TJSP\nDATA: ${new Date().toLocaleString("pt-BR")}\nTOTAL: ${processos.length}\n\n`;
   txt += "=".repeat(80) + "\n";
-
   processos.forEach((p) => {
     txt += `\n${"=".repeat(50)}\n`;
     txt += `PROCESSO: ${p.numeroProcesso}\n`;
     txt += `${"=".repeat(50)}\n`;
-    if (p.classe) txt += `⚖️ Classe: ${p.classe}\n`;
-    if (p.assunto) txt += `📋 Assunto: ${p.assunto}\n`;
-    if (p.vara) txt += `🏛️ Vara: ${p.vara}\n`;
-    if (p.juiz) txt += `👨‍⚖️ Juiz: ${p.juiz}\n`;
-    if (p.valor) txt += `💵 Valor: ${p.valor}\n`;
-    if (p.dataDistribuicao) txt += `📅 Distribuição: ${p.dataDistribuicao}\n`;
-    if (p.situacao) txt += `📌 Situação: ${p.situacao}\n`;
-    if (p.foro) txt += `🏢 Foro: ${p.foro}\n`;
-
+    if (p.classe) txt += `Classe: ${p.classe}\n`;
+    if (p.assunto) txt += `Assunto: ${p.assunto}\n`;
+    if (p.vara) txt += `Vara: ${p.vara}\n`;
+    if (p.juiz) txt += `Juiz: ${p.juiz}\n`;
+    if (p.valor) txt += `Valor: ${p.valor}\n`;
+    if (p.dataDistribuicao) txt += `Distribuicao: ${p.dataDistribuicao}\n`;
+    if (p.situacao) txt += `Situacao: ${p.situacao}\n`;
+    if (p.foro) txt += `Foro: ${p.foro}\n`;
     if (p.partes && p.partes.length > 0) {
       txt += `\nPARTES:\n`;
       p.partes.forEach(parte => {
@@ -74,18 +71,40 @@ function formatarRelatorioTxt(processos: ProcessoTJSP[]): string {
         if (parte.documento) txt += `    Documento: ${parte.documento}\n`;
       });
     }
-
     if (p.movimentacoes && p.movimentacoes.length > 0) {
-      txt += `\nÚLTIMAS MOVIMENTAÇÕES:\n`;
+      txt += `\nULTIMAS MOVIMENTACOES:\n`;
       p.movimentacoes.slice(0, 5).forEach(mov => {
         txt += `  ${mov.data}: ${mov.descricao}\n`;
       });
     }
-
     txt += "\n" + "-".repeat(80) + "\n";
   });
-
   return txt;
+}
+
+function parseValor(v: string): number {
+  if (!v) return 0;
+  return parseFloat(v.replace(/[^\d,]/g, "").replace(",", ".")) || 0;
+}
+
+function downloadTxt(conteudo: string, nomeArquivo: string) {
+  const blob = new Blob([conteudo], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nomeArquivo;
+  link.style.position = "fixed";
+  link.style.top = "-9999px";
+  link.style.left = "-9999px";
+  document.body.appendChild(link);
+  link.click();
+  // Aguardar um tick antes de remover para garantir que o clique foi processado
+  setTimeout(() => {
+    if (link.parentNode === document.body) {
+      document.body.removeChild(link);
+    }
+    URL.revokeObjectURL(url);
+  }, 100);
 }
 
 // ─── Componente Principal ─────────────────────────────────────────────────────
@@ -93,9 +112,12 @@ export default function Painel() {
   const [tipoBusca, setTipoBusca] = useState<"processo" | "cpf" | "oab">("oab");
   const [query, setQuery] = useState("");
   const [carregando, setCarregando] = useState(false);
-  const [processos, setProcessos] = useState<ProcessoTJSP[]>([]);
-  const [processosFiltrados, setProcessosFiltrados] = useState<ProcessoTJSP[]>([]);
-  const [processoAberto, setProcessoAberto] = useState<ProcessoTJSP | null>(null);
+
+  // Mapa de processos indexado por numeroProcesso para evitar mutações
+  const [processosMap, setProcessosMap] = useState<Map<string, ProcessoTJSP>>(new Map());
+  const [processosOrdem, setProcessosOrdem] = useState<string[]>([]);
+
+  const [processoAbertoId, setProcessoAbertoId] = useState<string | null>(null);
   const [buscaRealizada, setBuscaRealizada] = useState(false);
   const [totalResultados, setTotalResultados] = useState(0);
 
@@ -112,9 +134,14 @@ export default function Painel() {
   // Detalhe carregando
   const [detalheCarregando, setDetalheCarregando] = useState(false);
 
-  // Aplicar filtros
-  useEffect(() => {
-    let resultado = [...processos];
+  // Lista de processos derivada do mapa (sem mutação)
+  const processos = useMemo(() => {
+    return processosOrdem.map(id => processosMap.get(id)).filter(Boolean) as ProcessoTJSP[];
+  }, [processosMap, processosOrdem]);
+
+  // Processos filtrados e ordenados (usando useMemo, sem mutação)
+  const processosFiltrados = useMemo(() => {
+    let resultado = processos;
 
     if (filtroStatus === "ativos") {
       resultado = resultado.filter(p =>
@@ -127,17 +154,17 @@ export default function Painel() {
     }
 
     if (ordenarMaiorValor) {
-      resultado.sort((a, b) => {
-        const parseValor = (v: string) => {
-          if (!v) return 0;
-          return parseFloat(v.replace(/[^\d,]/g, "").replace(",", ".")) || 0;
-        };
-        return parseValor(b.valor) - parseValor(a.valor);
-      });
+      // Criar nova cópia antes de ordenar — nunca mutar o array original
+      resultado = [...resultado].sort((a, b) => parseValor(b.valor) - parseValor(a.valor));
     }
 
-    setProcessosFiltrados(resultado);
+    return resultado;
   }, [processos, filtroStatus, ordenarMaiorValor]);
+
+  const processoAberto = useMemo(() => {
+    if (!processoAbertoId) return null;
+    return processosMap.get(processoAbertoId) ?? null;
+  }, [processoAbertoId, processosMap]);
 
   const buscar = useCallback(async () => {
     if (!query.trim()) {
@@ -146,9 +173,9 @@ export default function Painel() {
     }
     setCarregando(true);
     setBuscaRealizada(true);
-    setProcessoAberto(null);
-    setProcessos([]);
-    setProcessosFiltrados([]);
+    setProcessoAbertoId(null);
+    setProcessosMap(new Map());
+    setProcessosOrdem([]);
 
     try {
       const resp = await fetch(`/api/buscar?tipo=${tipoBusca}&query=${encodeURIComponent(query.trim())}`);
@@ -162,9 +189,19 @@ export default function Painel() {
         return;
       }
       const data: ResultadoBusca = await resp.json();
-
       const lista: ProcessoTJSP[] = data.processos || [];
-      setProcessos(lista);
+
+      // Construir mapa imutável
+      const novoMapa = new Map<string, ProcessoTJSP>();
+      const novaOrdem: string[] = [];
+      lista.forEach((p, idx) => {
+        const id = p.numeroProcesso || `proc-${idx}`;
+        novoMapa.set(id, { ...p });
+        novaOrdem.push(id);
+      });
+
+      setProcessosMap(novoMapa);
+      setProcessosOrdem(novaOrdem);
       setTotalResultados(data.total || lista.length);
 
       if (lista.length === 0) {
@@ -184,21 +221,13 @@ export default function Painel() {
     if (e.key === "Enter") buscar();
   };
 
-  const abrirProcesso = async (p: ProcessoTJSP) => {
-    // Se já tem detalhe carregado, apenas abrir
-    if (p.detalheCarregado) {
-      setProcessoAberto(p);
-      return;
-    }
+  const abrirProcesso = useCallback(async (p: ProcessoTJSP) => {
+    const id = p.numeroProcesso;
+    setProcessoAbertoId(id);
 
-    // Carregar detalhe do processo
-    if (!p.urlDetalhe) {
-      setProcessoAberto(p);
-      return;
-    }
+    if (p.detalheCarregado || !p.urlDetalhe) return;
 
     setDetalheCarregando(true);
-    setProcessoAberto(p);
 
     try {
       const resp = await fetch(`/api/processo/detalhe?url=${encodeURIComponent(p.urlDetalhe)}`);
@@ -212,55 +241,49 @@ export default function Painel() {
         detalheCarregado: true,
       };
 
-      setProcessoAberto(processoCompleto);
-      // Atualizar na lista
-      setProcessos(prev => prev.map(proc =>
-        proc.numeroProcesso === p.numeroProcesso ? processoCompleto : proc
-      ));
+      // Atualizar o mapa sem mutar — criar novo Map
+      setProcessosMap(prev => {
+        const novoMapa = new Map(prev);
+        novoMapa.set(id, processoCompleto);
+        return novoMapa;
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
     } finally {
       setDetalheCarregando(false);
     }
-  };
+  }, []);
 
-  const copiarRelatorio = () => {
+  const copiarRelatorio = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
     navigator.clipboard.writeText(txt).then(() => toast.success("Relatório copiado!"));
-  };
+  }, [processosFiltrados]);
 
-  const exportarTxt = () => {
+  const exportarTxt = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
-    const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `processos_${query}_${new Date().toLocaleDateString("pt-BR").replace(/\//g, "-")}.txt`;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const data = new Date().toLocaleDateString("pt-BR").replace(/\//g, "-");
+    downloadTxt(txt, `processos_${query}_${data}.txt`);
     toast.success("Arquivo exportado!");
-  };
+  }, [processosFiltrados, query]);
 
-  const enviarWhatsApp = () => {
+  const enviarWhatsApp = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
     const encoded = encodeURIComponent(txt.substring(0, 4000));
     window.open(`https://wa.me/?text=${encoded}`, "_blank");
-  };
+  }, [processosFiltrados]);
 
-  const gerarIaDossie = async () => {
+  const gerarIaDossie = useCallback(async () => {
+    if (processosFiltrados.length === 0) return;
     setIaCarregando(true);
-    setIaTitulo("IA DOSSIÊ - Análise da Carteira");
+    setIaTitulo("IA DOSSIÊ — Análise Completa");
     setIaModal(true);
-    setIaTexto("Gerando análise com inteligência artificial...");
+    setIaTexto("Gerando dossiê com IA...");
     try {
       const resp = await fetch("/api/ia/dossie", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ processo: processosFiltrados[0], processos: processosFiltrados }),
+        body: JSON.stringify({ processos: processosFiltrados.slice(0, 10) }),
       });
       const data = await resp.json();
       setIaTexto(data.dossie || "Não foi possível gerar o dossiê.");
@@ -269,13 +292,13 @@ export default function Painel() {
     } finally {
       setIaCarregando(false);
     }
-  };
+  }, [processosFiltrados]);
 
-  const gerarIaProcesso = async (p: ProcessoTJSP) => {
+  const gerarIaProcesso = useCallback(async (p: ProcessoTJSP) => {
     setIaCarregando(true);
-    setIaTitulo(`Resumo IA - ${p.numeroProcesso}`);
+    setIaTitulo(`Resumo IA — ${p.numeroProcesso}`);
     setIaModal(true);
-    setIaTexto("Analisando processo com inteligência artificial...");
+    setIaTexto("Analisando processo com IA...");
     try {
       const resp = await fetch("/api/ia/resumo", {
         method: "POST",
@@ -289,13 +312,13 @@ export default function Painel() {
     } finally {
       setIaCarregando(false);
     }
-  };
+  }, []);
 
-  const gerarMensagemWA = async (p: ProcessoTJSP, tipo: string) => {
+  const gerarMensagemWA = useCallback(async (p: ProcessoTJSP, tipo: string) => {
     setIaCarregando(true);
-    setIaTitulo("Mensagem WhatsApp com IA");
+    setIaTitulo(`Mensagem WhatsApp — ${p.numeroProcesso}`);
     setIaModal(true);
-    setIaTexto("Gerando mensagem personalizada...");
+    setIaTexto("Gerando mensagem com IA...");
     try {
       const resp = await fetch("/api/ia/whatsapp", {
         method: "POST",
@@ -309,11 +332,11 @@ export default function Painel() {
     } finally {
       setIaCarregando(false);
     }
-  };
+  }, []);
 
-  const gerarOficio = async (p: ProcessoTJSP) => {
+  const gerarOficio = useCallback(async (p: ProcessoTJSP) => {
     setIaCarregando(true);
-    setIaTitulo(`Ofício - ${p.numeroProcesso}`);
+    setIaTitulo(`Ofício — ${p.numeroProcesso}`);
     setIaModal(true);
     setIaTexto("Gerando ofício jurídico...");
     try {
@@ -329,16 +352,19 @@ export default function Painel() {
     } finally {
       setIaCarregando(false);
     }
-  };
+  }, []);
 
-  const copiarIaTexto = () => {
+  const copiarIaTexto = useCallback(() => {
     navigator.clipboard.writeText(iaTexto).then(() => toast.success("Texto copiado!"));
-  };
+  }, [iaTexto]);
 
-  const enviarIaWhatsApp = () => {
+  const enviarIaWhatsApp = useCallback(() => {
     const encoded = encodeURIComponent(iaTexto.substring(0, 4000));
     window.open(`https://wa.me/?text=${encoded}`, "_blank");
-  };
+  }, [iaTexto]);
+
+  const fecharModal = useCallback(() => setProcessoAbertoId(null), []);
+  const fecharIaModal = useCallback(() => setIaModal(false), []);
 
   // ─── RENDER ───────────────────────────────────────────────────────────────────
   return (
@@ -371,7 +397,6 @@ export default function Painel() {
         {/* Barra de Busca */}
         <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-6 mb-6">
           <div className="flex gap-3 flex-wrap">
-            {/* Tipo de Busca */}
             <select
               value={tipoBusca}
               onChange={e => setTipoBusca(e.target.value as "processo" | "cpf" | "oab")}
@@ -382,7 +407,6 @@ export default function Painel() {
               <option value="processo">Nº Processo</option>
             </select>
 
-            {/* Campo de Busca */}
             <input
               type="text"
               value={query}
@@ -396,7 +420,6 @@ export default function Painel() {
               className="flex-1 min-w-[200px] bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 placeholder-gray-600"
             />
 
-            {/* Botão Buscar */}
             <button
               onClick={buscar}
               disabled={carregando}
@@ -413,7 +436,6 @@ export default function Painel() {
             </button>
           </div>
 
-          {/* Mensagem de carregamento */}
           {carregando && (
             <div className="mt-4 flex items-center gap-3 text-sm text-indigo-400">
               <span className="w-4 h-4 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin"></span>
@@ -425,16 +447,13 @@ export default function Painel() {
         {/* Filtros e Ações */}
         {buscaRealizada && !carregando && processos.length > 0 && (
           <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl p-4 mb-6 flex flex-wrap items-center gap-3">
-            {/* Filtros de Status */}
             <div className="flex gap-2">
               {(["todos", "ativos", "arquivados"] as const).map(s => (
                 <button
                   key={s}
                   onClick={() => setFiltroStatus(s)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold tracking-wider transition-all ${
-                    filtroStatus === s
-                      ? "bg-indigo-600 text-white"
-                      : "bg-[#1a1a2e] text-gray-400 hover:text-white"
+                    filtroStatus === s ? "bg-indigo-600 text-white" : "bg-[#1a1a2e] text-gray-400 hover:text-white"
                   }`}
                 >
                   {s.toUpperCase()}
@@ -444,7 +463,6 @@ export default function Painel() {
 
             <div className="h-4 w-px bg-[#2a2a4e]"></div>
 
-            {/* Maior Valor */}
             <button
               onClick={() => setOrdenarMaiorValor(!ordenarMaiorValor)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold tracking-wider transition-all ${
@@ -456,14 +474,12 @@ export default function Painel() {
 
             <div className="flex-1"></div>
 
-            {/* Contagem */}
             <span className="text-xs text-gray-500">
               {processosFiltrados.length} de {totalResultados} processos
             </span>
 
             <div className="h-4 w-px bg-[#2a2a4e]"></div>
 
-            {/* Ações */}
             <button onClick={copiarRelatorio} className="px-3 py-1.5 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all">
               📋 COPIAR
             </button>
@@ -489,9 +505,9 @@ export default function Painel() {
                 <p className="text-sm mt-2">Verifique os dados informados e tente novamente.</p>
               </div>
             ) : (
-              processosFiltrados.map((p, idx) => (
+              processosFiltrados.map((p) => (
                 <div
-                  key={`proc-${idx}-${p.numeroProcesso}`}
+                  key={p.numeroProcesso}
                   className="bg-[#0d0d1a] border border-[#1e1e2e] hover:border-indigo-800 rounded-xl p-4 cursor-pointer transition-all duration-200 hover:bg-[#111128]"
                   onClick={() => abrirProcesso(p)}
                 >
@@ -539,17 +555,16 @@ export default function Painel() {
       </div>
 
       {/* Modal de Detalhe do Processo */}
-      {processoAberto && (
+      {processoAberto !== null && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-start justify-end p-4 overflow-auto">
           <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl w-full max-w-2xl max-h-[95vh] overflow-auto">
-            {/* Header do Modal */}
             <div className="sticky top-0 bg-[#0d0d1a] border-b border-[#1e1e2e] p-4 flex items-center justify-between z-10">
               <div>
                 <h2 className="font-mono text-indigo-400 font-bold text-sm">{processoAberto.numeroProcesso}</h2>
                 <p className="text-xs text-gray-500 mt-0.5">{processoAberto.classe || "TJSP"}</p>
               </div>
               <button
-                onClick={() => setProcessoAberto(null)}
+                onClick={fecharModal}
                 className="text-gray-500 hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1a1a2e] transition-all"
               >
                 ✕
@@ -557,7 +572,6 @@ export default function Painel() {
             </div>
 
             <div className="p-4 space-y-4">
-              {/* Carregando detalhe */}
               {detalheCarregando && (
                 <div className="flex items-center gap-3 text-sm text-indigo-400 py-4">
                   <span className="w-5 h-5 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin"></span>
@@ -590,7 +604,7 @@ export default function Painel() {
                   <h3 className="text-xs font-bold text-gray-400 tracking-wider mb-3">PARTES DO PROCESSO</h3>
                   <div className="space-y-3">
                     {processoAberto.partes.map((parte, i) => (
-                      <div key={i} className="border border-[#1e1e2e] rounded-lg p-3">
+                      <div key={`parte-${i}`} className="border border-[#1e1e2e] rounded-lg p-3">
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`px-2 py-0.5 rounded text-xs font-bold ${
                             parte.polo?.toLowerCase().includes("ativo") || parte.polo?.toLowerCase().includes("autor") || parte.polo?.toLowerCase().includes("exequente")
@@ -619,7 +633,7 @@ export default function Painel() {
                   </h3>
                   <div className="space-y-2 max-h-60 overflow-auto">
                     {processoAberto.movimentacoes.map((mov, i) => (
-                      <div key={i} className="flex gap-3 text-sm border-b border-[#1e1e2e] pb-2 last:border-0">
+                      <div key={`mov-${i}`} className="flex gap-3 text-sm border-b border-[#1e1e2e] pb-2 last:border-0">
                         <span className="text-indigo-400 font-mono text-xs shrink-0 pt-0.5">{mov.data}</span>
                         <span className="text-gray-300 text-xs">{mov.descricao}</span>
                       </div>
@@ -637,7 +651,7 @@ export default function Painel() {
                   <div className="space-y-2">
                     {processoAberto.documentos.slice(0, 10).map((doc, i) => (
                       <a
-                        key={i}
+                        key={`doc-${i}`}
                         href={doc.url}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -666,16 +680,7 @@ export default function Painel() {
                   <button
                     onClick={() => {
                       const txt = formatarRelatorioTxt([processoAberto]);
-                      const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = `processo_${processoAberto.numeroProcesso}.txt`;
-                      a.style.display = "none";
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      URL.revokeObjectURL(url);
+                      downloadTxt(txt, `processo_${processoAberto.numeroProcesso}.txt`);
                     }}
                     className="px-3 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
                   >
@@ -733,7 +738,7 @@ export default function Painel() {
             <div className="flex items-center justify-between p-4 border-b border-[#1e1e2e]">
               <h3 className="font-bold text-sm text-indigo-400 tracking-wider">{iaTitulo}</h3>
               <button
-                onClick={() => setIaModal(false)}
+                onClick={fecharIaModal}
                 className="text-gray-500 hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1a1a2e]"
               >
                 ✕
