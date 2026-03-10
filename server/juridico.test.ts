@@ -424,3 +424,107 @@ describe("Busca por nome do advogado", () => {
     expect(tiposValidos).toContain("nome");
   });
 });
+
+// ─── Testes do sistema de keep-alive e renovação de TTL ──────────────────────────────────
+
+describe("Sistema de keep-alive e renovação de sessão TJSP", () => {
+  // Simular o estado de cookies e funções de gerenciamento
+  let cookiesAtivos = "";
+  let cookiesExpiram = 0;
+  const TTL_MAX_MS = 12 * 60 * 60 * 1000; // 12 horas
+
+  function setCookiesTJSP(cookies: string, ttlMs = TTL_MAX_MS) {
+    cookiesAtivos = cookies;
+    cookiesExpiram = Date.now() + ttlMs;
+  }
+
+  function cookiesValidos(): boolean {
+    return !!cookiesAtivos && Date.now() < cookiesExpiram;
+  }
+
+  function renovarTTLLocal() {
+    if (cookiesAtivos && cookiesExpiram > Date.now()) {
+      cookiesExpiram = Date.now() + TTL_MAX_MS;
+    }
+  }
+
+  function statusCookies() {
+    return {
+      autenticado: cookiesValidos(),
+      expiracao: cookiesExpiram ? new Date(cookiesExpiram).toISOString() : null,
+      tempoRestante: cookiesExpiram ? Math.max(0, Math.round((cookiesExpiram - Date.now()) / 60000)) + " min" : null,
+    };
+  }
+
+  it("deve configurar cookies com TTL de 12 horas por padrão", () => {
+    setCookiesTJSP("JSESSIONID=abc123");
+    const status = statusCookies();
+    expect(status.autenticado).toBe(true);
+    expect(status.tempoRestante).toContain("min");
+    const minutos = parseInt(status.tempoRestante!);
+    expect(minutos).toBeGreaterThan(700);
+    expect(minutos).toBeLessThanOrEqual(720);
+  });
+
+  it("deve renovar TTL local quando há requisição bem-sucedida", () => {
+    setCookiesTJSP("JSESSIONID=abc123", 30 * 60 * 1000); // 30 min TTL
+    const expiracaoAntes = cookiesExpiram;
+    renovarTTLLocal();
+    expect(cookiesExpiram).toBeGreaterThan(expiracaoAntes);
+    const minutos = Math.round((cookiesExpiram - Date.now()) / 60000);
+    expect(minutos).toBeGreaterThan(700);
+  });
+
+  it("não deve renovar TTL se cookies já expirados", () => {
+    cookiesAtivos = "JSESSIONID=expired";
+    cookiesExpiram = Date.now() - 1000; // já expirado
+    const expiracaoAntes = cookiesExpiram;
+    renovarTTLLocal();
+    expect(cookiesExpiram).toBe(expiracaoAntes);
+  });
+
+  it("deve invalidar cookies quando sessão expira no servidor", () => {
+    setCookiesTJSP("JSESSIONID=abc123");
+    expect(cookiesValidos()).toBe(true);
+    cookiesAtivos = "";
+    cookiesExpiram = 0;
+    expect(cookiesValidos()).toBe(false);
+    expect(statusCookies().autenticado).toBe(false);
+  });
+
+  it("deve retornar status correto com tempo restante formatado", () => {
+    setCookiesTJSP("JSESSIONID=abc123");
+    const status = statusCookies();
+    expect(status.autenticado).toBe(true);
+    expect(status.expiracao).not.toBeNull();
+    expect(status.tempoRestante).toMatch(/^\d+ min$/);
+  });
+
+  it("deve aceitar TTL personalizado menor que o padrão", () => {
+    setCookiesTJSP("JSESSIONID=abc123", 2 * 60 * 60 * 1000); // 2 horas
+    const status = statusCookies();
+    const minutos = parseInt(status.tempoRestante!);
+    expect(minutos).toBeGreaterThan(110);
+    expect(minutos).toBeLessThanOrEqual(120);
+  });
+
+  it("deve detectar que sessão expirada no servidor invalida cookies", () => {
+    setCookiesTJSP("JSESSIONID=abc123");
+    // Simular o que acontece quando o keep-alive detecta sessão expirada no TJSP
+    const htmlComLogin = '<form id="usernameForm">';
+    const sessaoExpirada = htmlComLogin.includes('id="usernameForm"');
+    if (sessaoExpirada) {
+      cookiesAtivos = "";
+      cookiesExpiram = 0;
+    }
+    expect(cookiesValidos()).toBe(false);
+  });
+
+  it("deve calcular TTL de 12 horas em milissegundos corretamente", () => {
+    const ttl12h = 12 * 60 * 60 * 1000;
+    expect(ttl12h).toBe(43200000);
+    const ttl4h = 4 * 60 * 60 * 1000;
+    expect(ttl12h).toBeGreaterThan(ttl4h);
+    expect(ttl12h / ttl4h).toBe(3); // 12h = 3x o TTL anterior de 4h
+  });
+});

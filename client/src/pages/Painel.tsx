@@ -367,29 +367,35 @@ export default function Painel() {
   const [cookiesInput, setCookiesInput] = useState("");
   const [configurandoCookies, setConfigurandoCookies] = useState(false);
 
-  // Verificar status TJSP ao iniciar
+  // Verificar status TJSP ao iniciar e periodicamente (a cada 2 min para refletir keep-alive)
   useEffect(() => {
-    fetch("/api/tjsp/status")
-      .then(r => r.json())
-      .then(data => {
-        setStatusTJSP({
-          autenticado: data.autenticado,
-          expiracao: data.expiracao,
-          tempoRestante: data.tempoRestante,
-        });
-        // Se não autenticado, tentar auto-login
-        if (!data.autenticado) {
-          fetch("/api/tjsp/auto-login", { method: "POST" })
-            .then(r => r.json())
-            .then(d => {
-              if (d.ok) {
-                setStatusTJSP({ autenticado: true, expiracao: d.expiracao, tempoRestante: d.tempoRestante });
-              }
-            })
-            .catch(() => {});
-        }
-      })
-      .catch(() => {});
+    const verificarStatus = () => {
+      fetch("/api/tjsp/status")
+        .then(r => r.json())
+        .then(data => {
+          setStatusTJSP({
+            autenticado: data.autenticado,
+            expiracao: data.expiracao,
+            tempoRestante: data.tempoRestante,
+          });
+          // Se não autenticado, tentar auto-login
+          if (!data.autenticado) {
+            fetch("/api/tjsp/auto-login", { method: "POST" })
+              .then(r => r.json())
+              .then(d => {
+                if (d.ok) {
+                  setStatusTJSP({ autenticado: true, expiracao: d.expiracao, tempoRestante: d.tempoRestante });
+                }
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    };
+    verificarStatus();
+    // Polling a cada 2 minutos para atualizar o tempo restante após renovações do keep-alive
+    const intervalo = setInterval(verificarStatus, 2 * 60 * 1000);
+    return () => clearInterval(intervalo);
   }, []);
 
   // Lista de processos derivada do mapa (sem mutação)
@@ -927,7 +933,7 @@ export default function Painel() {
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                 <span>TJSP CONECTADO</span>
                 {statusTJSP.tempoRestante && (
-                  <span className="text-gray-500">({statusTJSP.tempoRestante})</span>
+                  <span className="text-gray-500" title="Keep-alive ativo: sessão renovada automaticamente a cada 15 min">({statusTJSP.tempoRestante} • auto-renov.)</span>
                 )}
               </div>
             ) : (

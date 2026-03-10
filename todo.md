@@ -165,3 +165,12 @@
 - [x] Seção de Partes reformulada com siglas jurídicas completas e descrições
 - [x] Exeqte sempre identificado como recebedor da causa
 - [x] 47 testes vitest passando
+
+## Keep-alive e Estabilidade de Sessão (Fase 9 - Mar 2026)
+- [x] Keep-alive automático: ping ao TJSP a cada 15 minutos para manter sessão ativa
+- [x] TTL máximo ampliado de 4h para 12h (sessão mantida ativa pelo keep-alive)
+- [x] Renovação de TTL local após cada requisição bem-sucedida ao TJSP
+- [x] Invalidação imediata de cookies quando sessão expira no servidor TJSP
+- [x] Polling do status TJSP no frontend a cada 2 minutos (reflete renovações do keep-alive)
+- [x] Indicador visual "auto-renov." no header quando sessão está ativa com keep-alive
+- [x] 55 testes vitest passando

@@ -15,10 +15,59 @@ const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // ─── Gerenciamento de cookies ─────────────────────────────────────────────────
-export function setCookiesTJSP(cookies: string, ttlMs = 4 * 60 * 60 * 1000) {
+// TTL máximo: 12 horas (o TJSP aceita sessões longas se mantidas ativas via keep-alive)
+const TTL_MAX_MS = 12 * 60 * 60 * 1000;
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+export function setCookiesTJSP(cookies: string, ttlMs = TTL_MAX_MS) {
   cookiesAtivos = cookies;
   cookiesExpiram = Date.now() + ttlMs;
   console.log(`[TJSP] Cookies configurados. Expiram em ${new Date(cookiesExpiram).toLocaleTimeString("pt-BR")}`);
+  iniciarKeepAlive();
+}
+
+// Renovar TTL local após requisição bem-sucedida
+function renovarTTLLocal() {
+  if (cookiesAtivos && cookiesExpiram > Date.now()) {
+    cookiesExpiram = Date.now() + TTL_MAX_MS;
+  }
+}
+
+// Keep-alive: ping leve ao TJSP a cada 15 minutos para manter a sessão ativa
+function iniciarKeepAlive() {
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
+  keepAliveTimer = setInterval(async () => {
+    if (!cookiesAtivos) {
+      clearInterval(keepAliveTimer!);
+      keepAliveTimer = null;
+      return;
+    }
+    try {
+      const resp = await fetch(`${TJSP_BASE}/cpopg/open.do`, {
+        headers: {
+          Cookie: cookiesAtivos,
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "pt-BR,pt;q=0.9",
+          Referer: TJSP_BASE,
+        },
+      });
+      const html = await resp.text();
+      if (html.includes("sajcas/login") || html.includes('id="usernameForm"')) {
+        console.log("[TJSP] Keep-alive: sessão expirada no servidor TJSP.");
+        cookiesAtivos = "";
+        cookiesExpiram = 0;
+        clearInterval(keepAliveTimer!);
+        keepAliveTimer = null;
+      } else {
+        renovarTTLLocal();
+        console.log(`[TJSP] Keep-alive OK. Sessão ativa até ${new Date(cookiesExpiram).toLocaleTimeString("pt-BR")}`);
+      }
+    } catch (e) {
+      console.error("[TJSP] Keep-alive erro:", e instanceof Error ? e.message : e);
+    }
+  }, 15 * 60 * 1000); // a cada 15 minutos
+  console.log("[TJSP] Keep-alive iniciado (ping a cada 15 min).");
 }
 
 export function getCookiesTJSP(): string {
@@ -115,10 +164,13 @@ async function fetchTJSP(url: string): Promise<string> {
   if (!resp.ok) throw new Error(`HTTP ${resp.status} ao acessar ${url}`);
   const html = await resp.text();
   // Verificar se foi redirecionado para login
-  if (html.includes("sajcas/login") || html.includes("id=\"usernameForm\"")) {
+  if (html.includes("sajcas/login") || html.includes('id="usernameForm"')) {
     cookiesAtivos = ""; // Invalidar cookies
+    cookiesExpiram = 0;
     throw new Error("SESSAO_EXPIRADA");
   }
+  // Requisição bem-sucedida: renovar TTL local
+  renovarTTLLocal();
   return html;
 }
 
