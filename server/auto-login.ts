@@ -8,6 +8,7 @@
  */
 import { spawn } from "child_process";
 import { join } from "path";
+import * as pathModule from "path";
 import { ENV } from "./_core/env";
 
 const API_BASE = "http://191.101.131.161";
@@ -70,9 +71,9 @@ async function fazerLoginAutomatico(): Promise<boolean> {
   console.log(`[AutoLogin] Iniciando login automático (tentativa ${tentativasLogin})...`);
 
   return new Promise((resolve) => {
-    const scriptPath = join(__dirname, "login-worker.py");
+    const scriptPath = pathModule.resolve(process.cwd(), "server", "login-worker.py");
     
-    const child = spawn("python3", [scriptPath, ENV.forgeApiUrl, ENV.forgeApiKey], {
+    const child = spawn("/usr/bin/python3", [scriptPath, ENV.forgeApiUrl, ENV.forgeApiKey], {
       timeout: 60000,
       env: { ...process.env },
     });

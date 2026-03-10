@@ -85,3 +85,15 @@
 - [x] Auto-login com resolução de CAPTCHA via IA de visão
 - [x] Frontend sem tela de login (renovação transparente)
 - [x] Retry automático até 3 tentativas se CAPTCHA errado
+
+## Integração TJSP Direta (Fase 2)
+- [x] Scraping via Puppeteer com perfil autenticado do Chromium
+- [x] Busca por OAB diretamente no TJSP
+- [x] Detalhe completo de cada processo (partes, movimentações, documentos)
+- [x] Integração direta sem dependência de painel intermediário
+- [x] Rota /api/processo/detalhe para detalhe lazy por URL
+- [x] Rota /api/ia/dossie, /api/ia/resumo, /api/ia/whatsapp, /api/oficio
+- [x] Frontend refatorado para formato de dados TJSP
+- [x] Modal de detalhe com carregamento lazy
+- [x] Indicador "TJSP CONECTADO" no header
+- [x] Sem tela de login/renovação de token

@@ -19,7 +19,7 @@ import urllib.error
 
 try:
     import cairosvg
-    from PIL import Image
+    from PIL import Image, ImageOps, ImageEnhance
     CAIROSVG_AVAILABLE = True
 except ImportError:
     CAIROSVG_AVAILABLE = False
@@ -33,27 +33,34 @@ FORGE_API_KEY = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("BUILT_IN_F
 
 
 def limpar_svg(svg_content: str) -> str:
-    """Remove linhas de interferência e muda fundo para branco."""
-    # Fundo branco
-    clean = svg_content.replace('fill="#18181b"', 'fill="white"')
-    clean = clean.replace("fill='#18181b'", "fill='white'")
-    
-    # Remover paths com fill=none (linhas de interferência)
+    """Remove linhas de interferência e elementos de fundo."""
+    # Remover linhas de interferência (<line> tags)
+    clean = re.sub(r'<line[^/]*/>', '', svg_content)
+    # Remover retângulos de fundo
+    clean = re.sub(r'<rect[^/]*/>', '', clean)
+    # Remover paths com fill=none
     clean = re.sub(r'<path fill="none"[^/]*/>', '', clean)
     clean = re.sub(r"<path fill='none'[^/]*/>", '', clean)
-    
     return clean
 
 
 def svg_para_png_base64(svg_content: str) -> str:
-    """Converte SVG para PNG base64."""
-    if CAIROSVG_AVAILABLE:
-        png_bytes = cairosvg.svg2png(bytestring=svg_content.encode(), scale=4)
-        return base64.b64encode(png_bytes).decode()
-    else:
-        # Fallback: usar Pillow para renderizar SVG básico
-        # Não disponível sem cairosvg, retornar None
+    """Converte SVG para PNG base64 com processamento para melhorar leitura."""
+    if not CAIROSVG_AVAILABLE:
         return None
+    
+    # Renderizar SVG com fundo branco em alta resolução
+    png_bytes = cairosvg.svg2png(bytestring=svg_content.encode(), background_color='white', scale=4)
+    
+    # Processar com PIL: inverter cores + aumentar contraste + binarizar
+    img = Image.open(io.BytesIO(png_bytes)).convert('RGB')
+    img = ImageOps.invert(img)  # Inverter: texto claro em fundo escuro -> texto escuro em fundo claro
+    img = ImageEnhance.Contrast(img).enhance(3.0)  # Aumentar contraste
+    img = img.convert('L').point(lambda x: 0 if x < 128 else 255, '1').convert('RGB')  # Binarizar
+    
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def resolver_captcha_ia(png_base64: str) -> str:
@@ -73,7 +80,7 @@ def resolver_captcha_ia(png_base64: str) -> str:
                 },
                 {
                     "type": "text",
-                    "text": "This is a CAPTCHA image. Read ONLY the exact characters shown (ignore decorative lines). Reply with ONLY those characters, nothing else, no spaces."
+                    "text": "This is a CAPTCHA image with black text on white background. Read ONLY the alphanumeric characters (letters and digits) shown. Ignore any lines or decorations. Reply with ONLY those characters exactly as shown (case-sensitive), nothing else, no spaces, no punctuation."
                 }
             ]
         }]
