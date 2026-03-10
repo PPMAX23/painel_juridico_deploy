@@ -1326,8 +1326,19 @@ export default function Painel() {
                                   {pessoa.endereco.bairro ? ` — ${pessoa.endereco.bairro}` : ""}
                                 </p>
                               )}
-                              {pessoa.mae && pessoa.mae !== "null" && (
-                                <p className="text-xs text-gray-500 mt-0.5">👩 Mãe: {pessoa.mae}</p>
+                              {/* Telefones com indicador de WhatsApp */}
+                              {pessoa.telefones?.itens && pessoa.telefones.itens.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {pessoa.telefones.itens.slice(0, 4).map((tel: any, ti: number) => (
+                                    <span key={ti} className="text-xs font-mono px-1.5 py-0.5 rounded bg-[#0a1628] border border-blue-900/40 text-gray-300 flex items-center gap-1">
+                                      {tel.whatsapp ? <span className="text-green-400 text-[10px]">WA</span> : <span className="text-gray-600 text-[10px]">📞</span>}
+                                      ({tel.ddd}) {tel.numero}
+                                    </span>
+                                  ))}
+                                  {pessoa.telefones.itens.length > 4 && (
+                                    <span className="text-xs text-gray-600">+{pessoa.telefones.itens.length - 4}</span>
+                                  )}
+                                </div>
                               )}
                             </div>
                             <div className="flex flex-col items-end gap-1 shrink-0">
