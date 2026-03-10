@@ -1,0 +1,85 @@
+# Painel Jurídico - TODO
+
+## Backend (API)
+- [ ] Rota POST /api/auth/login com usuário/senha/captcha
+- [ ] Rota GET /api/auth/logout
+- [x] Rota GET /api/buscar?tipo=oab|processo|cpf&query=... (proxy para API externa)
+- [x] Rota GET /api/consulta-nacional?num=... (consulta por número)
+- [x] Rota POST /api/whatsapp/validar (validação de WhatsApp)
+- [x] Rota POST /api/ia/processo (resumo IA do processo)
+- [x] Rota POST /api/ia/advogado (dossiê IA do advogado)
+- [x] Rota POST /api/ia/whatsapp (mensagem WA com IA)
+- [x] Rota GET /api/foto-adv?uf=&num= (foto do advogado)
+- [x] Gerenciamento de token JWT com renovação automática
+- [x] Timer de sessão (30 minutos)
+
+## Frontend - Página de Login
+- [ ] Layout dark mode com logo
+- [ ] Campo usuário
+- [ ] Campo senha
+- [ ] CAPTCHA visual
+- [ ] Botão AUTENTICAR
+- [ ] Validação e redirecionamento
+
+## Frontend - Painel Principal
+- [x] Header com logo "Painel Jurídico" + badge PRO
+- [x] Timer de sessão regressivo
+- [x] Botão SAIR
+- [x] Dropdown tipo de busca (Nº Proc. / CPF/CNPJ / OAB)
+- [x] Campo de busca com placeholder "Digite o alvo..."
+- [x] Botão buscar com ícone
+- [x] Tela inicial com ícone escudo + "Conexão Segura Estabelecida"
+- [x] Mensagem "Consultando Bases Nacionais Seguras..." durante busca
+
+## Frontend - Lista de Resultados
+- [x] Contador "X Processos Exibidos"
+- [x] Cards de processo com: tribunal, data, tipo ação, número, assunto, valor
+- [x] Filtros: Todos / Ativos / Arquivados
+- [x] Filtros tipo ação: CPF x CPF / CPF x CNPJ / CNPJ x CNPJ / CNPJ x CPF
+- [x] Filtro por tribunal (dropdown dinâmico)
+- [x] Botão Maior Valor (ordenação)
+- [x] Botão Copiar Relatório
+- [x] Botão Exportar TXT
+- [x] Botão Enviar WhatsApp
+- [x] Botão IA DOSSIÊ
+
+## Frontend - Detalhe do Processo
+- [x] Badge ATIVO/ARQUIVADO
+- [x] Número do processo formatado
+- [x] Tribunal + Classe processual
+- [x] Assunto principal
+- [x] Botão fechar
+- [x] Botão Copiar Detalhes
+- [x] Botão Baixar TXT
+- [x] Botão Enviar WA
+- [x] Botão WA Mensagem Causa Ganha
+- [x] Botão WA Gerar com IA
+- [x] Botão Resumo IA
+- [x] Seção Ofício Gerado + Botão BAIXAR OFÍCIO FORMATADO
+- [x] Informações Gerais (Valor, Distribuição, Situação, Fase, Órgão Julgador)
+- [x] Polo Ativo com dados OSINT (Score, Renda, Idade, Poder Aquisitivo)
+- [x] Telefones com botão Validar Zaps
+- [x] Advogados representantes
+- [x] Polo Passivo (mesma estrutura)
+- [x] Timeline de movimentações
+- [x] Lista de Docs. Oficiais com download
+
+## Design
+- [x] Tema dark mode (#050507 fundo, #18181b painel)
+- [x] Cor accent indigo (#6366f1)
+- [x] Fontes Inter + JetBrains Mono
+- [x] Efeito glass no header
+- [x] Cards com hover
+- [x] Toast notifications
+- [x] Animação ia-glow no botão IA
+- [x] Responsivo
+- [ ] Scrollbar customizada
+
+## Segurança
+- [x] Expiração automática de sessão (timer 30 min)
+- [x] Redirecionamento ao expirar sessão
+- [x] Sistema de token JWT com renovação
+
+## Pendente
+- [ ] Página de login própria do novo painel
+- [ ] Sistema de renovação automática de token (sem precisar logar no painel original)
