@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, test, expect } from "vitest";
 
-// ─── Testes das funções utilitárias do painel ─────────────────────────────────
+import { obterDDDsPorForo, filtrarPessoasPorDDD } from "./foro-ddd";
 
-// Simular as funções utilitárias do Painel.tsx
+// ─── Testes das funções utilitárias do painel ─────────────────────────────────────────────
 function formatarNumProcesso(num: string): string {
   const digits = num.replace(/\D/g, "");
   if (digits.length === 20) {
@@ -612,5 +612,57 @@ print(formatar_data_extenso('01/01/2025'))
     const lines = result.stdout.trim().split("\n");
     expect(lines[0]).toContain("março");
     expect(lines[1]).toContain("janeiro");
+  });
+});
+
+// ─── Testes do filtro DDD por foro ────────────────────────────────────────────
+describe("Filtro por DDD da comarca do fórum", () => {
+
+  test("deve retornar DDD 11 para Foro Central Cível", () => {
+    const ddds = obterDDDsPorForo("Foro Central Cível");
+    expect(ddds).toContain(11);
+  });
+
+  test("deve retornar DDD 19 para Foro de Campinas", () => {
+    const ddds = obterDDDsPorForo("Foro de Campinas");
+    expect(ddds).toContain(19);
+  });
+
+  test("deve retornar DDD 16 para Foro de Ribeirão Preto", () => {
+    const ddds = obterDDDsPorForo("Foro de Ribeirão Preto");
+    expect(ddds).toContain(16);
+  });
+
+  test("deve retornar array vazio para foro desconhecido", () => {
+    const ddds = obterDDDsPorForo("Foro Desconhecido XYZ");
+    expect(ddds).toEqual([]);
+  });
+
+  test("deve filtrar pessoas pelo DDD correto", () => {
+    const pessoas = [
+      { nome: "João SP", cpf: "111", telefones: { itens: [{ ddd: 11, numero: 99999999, numero_completo: "11999999999" }] } },
+      { nome: "Maria RJ", cpf: "222", telefones: { itens: [{ ddd: 21, numero: 88888888, numero_completo: "21888888888" }] } },
+      { nome: "Pedro SP", cpf: "333", telefones: { itens: [{ ddd: 11, numero: 77777777, numero_completo: "11777777777" }] } },
+    ];
+    const filtradas = filtrarPessoasPorDDD(pessoas, [11]);
+    expect(filtradas).toHaveLength(2);
+    expect(filtradas.map(p => p.nome)).toEqual(["João SP", "Pedro SP"]);
+  });
+
+  test("deve retornar 1 pessoa sem filtrar quando há apenas 1 resultado", () => {
+    const pessoas = [
+      { nome: "Ana RJ", cpf: "444", telefones: { itens: [{ ddd: 21, numero: 55555555, numero_completo: "21555555555" }] } },
+    ];
+    const filtradas = filtrarPessoasPorDDD(pessoas, [11]);
+    expect(filtradas).toHaveLength(1); // 1 pessoa = sem filtro
+  });
+
+  test("deve retornar lista original se filtro eliminar todos", () => {
+    const pessoas = [
+      { nome: "Carlos RJ", cpf: "555", telefones: { itens: [{ ddd: 21, numero: 44444444, numero_completo: "21444444444" }] } },
+      { nome: "Fernanda RJ", cpf: "666", telefones: { itens: [{ ddd: 21, numero: 33333333, numero_completo: "21333333333" }] } },
+    ];
+    const filtradas = filtrarPessoasPorDDD(pessoas, [11]);
+    expect(filtradas).toHaveLength(2); // fallback: retorna original
   });
 });

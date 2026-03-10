@@ -605,15 +605,24 @@ export default function Painel() {
     setPessoaSelecionada(null);
     setConsultaNomeProcesso(processoId);
     try {
-      const resp = await fetch(`/api/consulta-nome?nome=${encodeURIComponent(nome.trim())}`);
+      // Passar foro do processo para filtro por DDD da comarca no servidor
+      const foroParam = processo?.foro ? `&foro=${encodeURIComponent(processo.foro)}` : "";
+      const resp = await fetch(`/api/consulta-nome?nome=${encodeURIComponent(nome.trim())}${foroParam}`);
       if (!resp.ok) return;
       const data: ResultadoConsultaNome = await resp.json();
       if (data.itens && data.itens.length > 0) {
         setConsultaNomeResultados(data.itens);
-        // Tentar seleção automática inteligente
-        const autoSelecionada = selecionarAutomaticamente(data.itens, processo);
+
+        // Se após filtro por DDD sobrou apenas 1 pessoa, selecionar automaticamente
+        let autoSelecionada: PessoaEnriquecida | null = null;
+        if (data.itens.length === 1) {
+          autoSelecionada = data.itens[0];
+        } else {
+          // Tentar seleção automática inteligente entre os filtrados
+          autoSelecionada = selecionarAutomaticamente(data.itens, processo);
+        }
+
         if (autoSelecionada) {
-          // Selecionar automaticamente e buscar telefones
           setPessoaSelecionada(autoSelecionada);
           // Buscar telefones via CPF
           const cpfLimpo = autoSelecionada.cpf.replace(/\D/g, "");

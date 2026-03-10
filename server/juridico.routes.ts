@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { invokeLLM } from "./_core/llm";
+import { obterDDDsPorForo, filtrarPessoasPorDDD } from "./foro-ddd";
 import {
   buscarPorOAB,
   buscarPorCPFCNPJ,
@@ -316,7 +317,7 @@ router.post("/alvara/gerar", async (req: Request, res: Response) => {
 
 // ─── Consulta por Nome via API Supabase ─────────────────────────────────────
 router.get("/consulta-nome", async (req: Request, res: Response) => {
-  const { nome } = req.query as { nome?: string };
+  const { nome, foro } = req.query as { nome?: string; foro?: string };
   if (!nome || String(nome).trim().length < 3) {
     return res.status(400).json({ error: "Parâmetro nome é obrigatório (mínimo 3 caracteres)" });
   }
@@ -333,6 +334,17 @@ router.get("/consulta-nome", async (req: Request, res: Response) => {
       return res.status(resp.status).json({ error: `Erro na API: ${resp.status}` });
     }
     const data = await resp.json();
+
+    // ── Filtro por DDD da comarca do fórum ──────────────────────────────────
+    if (foro && data.itens && Array.isArray(data.itens) && data.itens.length > 1) {
+      const dddsValidos = obterDDDsPorForo(String(foro));
+      if (dddsValidos.length > 0) {
+        const itensFiltrados = filtrarPessoasPorDDD(data.itens, dddsValidos);
+        console.log(`[consulta-nome] Foro: "${foro}" → DDDs: [${dddsValidos}] | ${data.itens.length} → ${itensFiltrados.length} pessoas`);
+        return res.json({ ...data, itens: itensFiltrados, total: itensFiltrados.length, _filtro_ddd: dddsValidos });
+      }
+    }
+
     return res.json(data);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
