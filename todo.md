@@ -174,3 +174,14 @@
 - [x] Polling do status TJSP no frontend a cada 2 minutos (reflete renovações do keep-alive)
 - [x] Indicador visual "auto-renov." no header quando sessão está ativa com keep-alive
 - [x] 55 testes vitest passando
+
+## Alvará via Template PDF Original (Fase 10 - Mar 2026)
+- [x] Substituir gerador PDFKit por sistema baseado em template PDF original
+- [x] Script Python (PyMuPDF) que abre o PDF base e sobrepõe apenas os dados variáveis
+- [x] Assinatura, marca d'água, brasão e formatação original 100% preservados
+- [x] Campos substituídos: número do processo, data, valor, reclamante, CPF, advogado, réu
+- [x] Parágrafo principal reescrito com negrito nos campos corretos
+- [x] Inciso I reescrito com nome e valor do processo
+- [x] Data por extenso atualizada na página 2 (SÃO PAULO, X de mês de YYYY)
+- [x] Serviço alvara.service.ts refatorado para chamar o script Python via execFile
+- [x] 61 testes vitest passando

@@ -528,3 +528,89 @@ describe("Sistema de keep-alive e renovação de sessão TJSP", () => {
     expect(ttl12h / ttl4h).toBe(3); // 12h = 3x o TTL anterior de 4h
   });
 });
+
+// ─── Testes do sistema de geração de Alvará via PDF template ─────────────────
+
+describe("Geração de Alvará via PDF template (PyMuPDF)", () => {
+  const path = require("path");
+  const fs = require("fs");
+
+  const TEMPLATE_PATH = path.join(__dirname, "assets", "alvara-template.pdf");
+  const SCRIPT_PATH = path.join(__dirname, "gerar_alvara.py");
+
+  it("deve existir o template PDF do alvará", () => {
+    expect(fs.existsSync(TEMPLATE_PATH)).toBe(true);
+  });
+
+  it("deve existir o script Python de geração", () => {
+    expect(fs.existsSync(SCRIPT_PATH)).toBe(true);
+  });
+
+  it("script Python deve ter sintaxe válida", async () => {
+    const { execFile } = require("child_process");
+    const { promisify } = require("util");
+    const execFileAsync = promisify(execFile);
+    const result = await execFileAsync("python3", ["-c", `import ast; ast.parse(open('${SCRIPT_PATH}').read()); print('OK')`]);
+    expect(result.stdout.trim()).toBe("OK");
+  });
+
+  it("script Python deve ter suporte a acentos (UTF-8)", () => {
+    const content = fs.readFileSync(SCRIPT_PATH, "utf-8");
+    expect(content).toContain("necessárias");
+    expect(content).toContain("indicação");
+    expect(content).toContain("vinculação");
+  });
+
+  it("deve gerar PDF com dados corretos usando o template", async () => {
+    const { execFile } = require("child_process");
+    const { promisify } = require("util");
+    const os = require("os");
+    const execFileAsync = promisify(execFile);
+
+    const tmpFile = path.join(os.tmpdir(), `alvara-test-${Date.now()}.pdf`);
+    const payload = JSON.stringify({
+      template_path: TEMPLATE_PATH,
+      output_path: tmpFile,
+      numero_processo: "9999999-99.2024.8.26.0001",
+      data_atuacao: "10/03/2026",
+      valor_causa: "50.000,00",
+      nome_reclamante: "JOAO DA SILVA TESTE",
+      cpf_reclamante: "111.222.333-44",
+      nome_advogado: "advogado teste",
+      nome_reu: "Empresa Teste S.A.",
+    });
+
+    await execFileAsync("python3", [SCRIPT_PATH, payload], { timeout: 30000 });
+
+    expect(fs.existsSync(tmpFile)).toBe(true);
+    const stats = fs.statSync(tmpFile);
+    expect(stats.size).toBeGreaterThan(100000); // PDF deve ter pelo menos 100KB
+
+    // Verificar que o PDF contém os dados corretos
+    const { execSync } = require("child_process");
+    const text = execSync(`pdftotext "${tmpFile}" -`).toString();
+    expect(text).toContain("9999999-99.2024.8.26.0001");
+    expect(text).toContain("JOAO DA SILVA TESTE");
+    expect(text).toContain("50.000,00");
+
+    // Limpar
+    fs.unlinkSync(tmpFile);
+  }, 30000);
+
+  it("deve formatar data por extenso corretamente", async () => {
+    const { execFile } = require("child_process");
+    const { promisify } = require("util");
+    const execFileAsync = promisify(execFile);
+
+    const result = await execFileAsync("python3", ["-c", `
+import sys
+sys.path.insert(0, '${__dirname}')
+exec(open('${SCRIPT_PATH}').read().split('if __name__')[0])
+print(formatar_data_extenso('10/03/2026'))
+print(formatar_data_extenso('01/01/2025'))
+`]);
+    const lines = result.stdout.trim().split("\n");
+    expect(lines[0]).toContain("março");
+    expect(lines[1]).toContain("janeiro");
+  });
+});
