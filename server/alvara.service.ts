@@ -40,7 +40,7 @@ export async function gerarAlvaraPDF(dados: DadosAlvara): Promise<Buffer> {
     output_path: tmpFile,
     numero_processo: dados.numeroProcesso,
     data_atuacao: dados.dataAtuacao || formatarDataAtual(),
-    valor_causa: dados.valorCausa,
+    valor_causa: dados.valorCausa.replace(/^R\$\s*/i, "").trim(),
     nome_reclamante: dados.nomeReclamante,
     cpf_reclamante: dados.cpfReclamante || "Não informado",
     nome_advogado: dados.nomeAdvogado || "",

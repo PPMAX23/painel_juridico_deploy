@@ -2,12 +2,29 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import { execSync } from "child_process";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import juridicoRoutes from "../juridico.routes";
+
+// Garantir que PyMuPDF esteja instalado (necessário para geração de alvará)
+try {
+  execSync("python3 -c 'import fitz'", { stdio: "ignore" });
+} catch {
+  console.log("[startup] Instalando PyMuPDF (necessário para geração de alvará)...");
+  try {
+    execSync(
+      "pip3 install pymupdf --quiet --break-system-packages 2>/dev/null || pip3 install pymupdf --quiet",
+      { stdio: "inherit", timeout: 120000 }
+    );
+    console.log("[startup] PyMuPDF instalado com sucesso.");
+  } catch (e) {
+    console.error("[startup] Falha ao instalar PyMuPDF:", e);
+  }
+}
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
