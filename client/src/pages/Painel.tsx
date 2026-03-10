@@ -50,18 +50,41 @@ interface ResultadoBusca {
   processos: ProcessoTJSP[];
 }
 
-// ─── Tipo retorno API CPF ─────────────────────────────────────────────────────
-interface DadosCPF {
-  status: string;
-  cpf: string;
+// ─── Tipos retorno API Supabase (consulta por nome) ──────────────────────────────
+interface PessoaEnriquecida {
   nome: string;
+  cpf: string;
   sexo?: string;
   nascimento?: string;
+  mae?: string;
+  pai?: string;
+  score?: { CSB8?: string; CSBA?: string; faixa_CSB8?: string; faixa_CSBA?: string };
+  endereco?: {
+    tipo_logradouro?: string;
+    logradouro?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
+    cep?: string;
+  };
+  // Telefones podem vir de consulta por CPF
+  telefones?: { total: number; itens: Array<{ ddd: number; numero: number; numero_completo: string }> };
+}
+
+interface ResultadoConsultaNome {
+  consulta: string;
+  total: number;
+  itens: PessoaEnriquecida[];
+}
+
+// Manter DadosCPF para compatibilidade com consulta por CPF
+interface DadosCPF extends PessoaEnriquecida {
+  status: string;
   filiacao?: { mae?: string; pai?: string };
   estado_civil?: string;
-  score?: { CSB8?: string; faixa_CSB8?: string; CSBA?: number; faixa_CSBA?: string };
   enderecos?: { total: number; itens: Array<{ tipo_logradouro?: string; logradouro?: string; numero?: string; bairro?: string; cidade?: string; uf?: string; cep?: string }> };
-  telefones?: { total: number; itens: Array<{ ddd: number; numero: number; numero_completo: string }> };
 }
 
 interface StatusTJSP {
@@ -196,10 +219,14 @@ export default function Painel() {
   // Detalhe carregando
   const [detalheCarregando, setDetalheCarregando] = useState(false);
 
-  // Dados enriquecidos via API CPF
-  const [dadosCpf, setDadosCpf] = useState<DadosCPF | null>(null);
-  const [dadosCpfCarregando, setDadosCpfCarregando] = useState(false);
-  const [dadosCpfProcesso, setDadosCpfProcesso] = useState<string | null>(null); // qual processo foi consultado
+  // Dados enriquecidos via API Supabase (consulta por nome)
+  const [consultaNomeResultados, setConsultaNomeResultados] = useState<PessoaEnriquecida[]>([]);
+  const [consultaNomeCarregando, setConsultaNomeCarregando] = useState(false);
+  const [consultaNomeProcesso, setConsultaNomeProcesso] = useState<string | null>(null);
+  const [pessoaSelecionada, setPessoaSelecionada] = useState<PessoaEnriquecida | null>(null);
+  // Manter compatibilidade com o tipo DadosCPF para não quebrar o painel de exibição
+  const dadosCpf = pessoaSelecionada as DadosCPF | null;
+  const dadosCpfCarregando = consultaNomeCarregando;
 
   // Status TJSP
   const [statusTJSP, setStatusTJSP] = useState<StatusTJSP>({ autenticado: false, expiracao: null, tempoRestante: null });
@@ -360,40 +387,45 @@ export default function Painel() {
     if (e.key === "Enter") buscar();
   };
 
-  // Consultar API CPF para parte passiva
-  const consultarCPF = useCallback(async (cpf: string, processoId: string) => {
-    const cpfLimpo = cpf.replace(/\D/g, "");
-    if (cpfLimpo.length !== 11) return; // só CPF (11 dígitos), não CNPJ
-    if (dadosCpfProcesso === processoId) return; // já consultado para este processo
-    setDadosCpfCarregando(true);
-    setDadosCpf(null);
-    setDadosCpfProcesso(processoId);
+  // Consultar API Supabase por nome da parte passiva
+  const consultarPorNome = useCallback(async (nome: string, processoId: string) => {
+    if (!nome || nome.trim().length < 3) return;
+    if (consultaNomeProcesso === processoId) return; // já consultado para este processo
+    setConsultaNomeCarregando(true);
+    setConsultaNomeResultados([]);
+    setPessoaSelecionada(null);
+    setConsultaNomeProcesso(processoId);
     try {
-      const resp = await fetch(`/api/consulta-cpf?cpf=${cpfLimpo}`);
+      const resp = await fetch(`/api/consulta-nome?nome=${encodeURIComponent(nome.trim())}`);
       if (!resp.ok) return;
-      const data: DadosCPF = await resp.json();
-      if (data.status === "OK") setDadosCpf(data);
+      const data: ResultadoConsultaNome = await resp.json();
+      if (data.itens && data.itens.length > 0) {
+        setConsultaNomeResultados(data.itens);
+        // Se só houver 1 resultado, selecionar automaticamente
+        if (data.itens.length === 1) setPessoaSelecionada(data.itens[0]);
+      }
     } catch { /* silencioso */ } finally {
-      setDadosCpfCarregando(false);
+      setConsultaNomeCarregando(false);
     }
-  }, [dadosCpfProcesso]);
+  }, [consultaNomeProcesso]);
 
   const abrirProcesso = useCallback(async (p: ProcessoTJSP) => {
     const id = p.numeroProcesso;
     setProcessoAbertoId(id);
-    // Limpar dados CPF do processo anterior
-    setDadosCpf(null);
-    setDadosCpfProcesso(null);
+    // Limpar dados de consulta do processo anterior
+    setConsultaNomeResultados([]);
+    setPessoaSelecionada(null);
+    setConsultaNomeProcesso(null);
 
     if (p.detalheCarregado || !p.codigoProcesso) {
-      // Se já carregado, verificar se tem CPF da parte passiva para consultar
+      // Se já carregado, consultar por nome da parte passiva
       if (p.detalheCarregado && p.partes) {
         const passiva = p.partes.find(pt => {
           const t = (pt.polo || pt.tipo || "").toLowerCase();
           return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
         });
-        const cpf = passiva?.documento || passiva?.cpfCnpj || "";
-        if (cpf) consultarCPF(cpf, id);
+        const nomePassiva = passiva?.nome || "";
+        if (nomePassiva) consultarPorNome(nomePassiva, id);
       }
       return;
     }
@@ -423,20 +455,20 @@ export default function Painel() {
         return novoMapa;
       });
 
-      // Consultar API CPF para parte passiva automaticamente
+      // Consultar API Supabase por nome da parte passiva
       const passiva = processoCompleto.partes?.find(pt => {
         const t = (pt.polo || pt.tipo || "").toLowerCase();
         return t.includes("execut") || t.includes("exectd") || t.includes("réu") || t.includes("requerid") || t.includes("passiv");
       });
-      const cpfPassiva = passiva?.documento || passiva?.cpfCnpj || "";
-      if (cpfPassiva) consultarCPF(cpfPassiva, id);
+      const nomePassiva = passiva?.nome || "";
+      if (nomePassiva) consultarPorNome(nomePassiva, id);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
     } finally {
       setDetalheCarregando(false);
     }
-  }, [consultarCPF]);
+  }, [consultarPorNome]);
 
   const configurarCookies = useCallback(async () => {
     if (!cookiesInput.trim()) {
@@ -854,132 +886,152 @@ export default function Painel() {
                 );
               })()}
 
-              {/* ─── Painel de Dados Enriquecidos via API CPF ─── */}
-              {(dadosCpfCarregando || dadosCpf) && (
+              {/* ─── Painel de Dados Enriquecidos via API Supabase (busca por nome) ─── */}
+              {(consultaNomeCarregando || consultaNomeResultados.length > 0) && (
                 <div className="bg-gradient-to-br from-[#0a1628] to-[#0d1f3c] border border-blue-800/40 rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-xs font-bold text-blue-400 tracking-wider">🔍 DADOS ENRIQUECIDOS — INDENIZADO</h3>
-                    {dadosCpfCarregando && (
+                    {consultaNomeCarregando && (
                       <span className="flex items-center gap-1.5 text-xs text-blue-400">
                         <span className="w-3 h-3 border border-blue-400/30 border-t-blue-400 rounded-full animate-spin"></span>
-                        Consultando base...
+                        Consultando base de dados...
                       </span>
+                    )}
+                    {!consultaNomeCarregando && consultaNomeResultados.length > 1 && !pessoaSelecionada && (
+                      <span className="text-xs text-yellow-400">{consultaNomeResultados.length} pessoas encontradas — selecione a correta</span>
                     )}
                   </div>
 
-                  {dadosCpf && (
+                  {/* Lista de pessoas para seleção quando há múltiplos resultados */}
+                  {!pessoaSelecionada && consultaNomeResultados.length > 1 && (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {consultaNomeResultados.map((pessoa, i) => (
+                        <button
+                          key={`pessoa-${i}`}
+                          onClick={() => setPessoaSelecionada(pessoa)}
+                          className="w-full text-left p-3 bg-[#0d1a2e] hover:bg-[#112240] border border-blue-900/30 hover:border-blue-600/50 rounded-lg transition-all group"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-white truncate">{pessoa.nome}</p>
+                              <p className="text-xs text-gray-400 font-mono mt-0.5">
+                                CPF: {pessoa.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}
+                                {pessoa.nascimento ? ` • Nasc: ${pessoa.nascimento}` : ""}
+                              </p>
+                              {pessoa.endereco && (
+                                <p className="text-xs text-gray-500 mt-0.5 truncate">
+                                  📍 {[pessoa.endereco.cidade, pessoa.endereco.uf].filter(Boolean).join("/")}
+                                  {pessoa.endereco.bairro ? ` — ${pessoa.endereco.bairro}` : ""}
+                                </p>
+                              )}
+                              {pessoa.mae && pessoa.mae !== "null" && (
+                                <p className="text-xs text-gray-500 mt-0.5">👩 Mãe: {pessoa.mae}</p>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              {pessoa.score?.CSBA && (
+                                <span className="text-xs font-bold px-2 py-0.5 rounded" style={{
+                                  backgroundColor: Number(pessoa.score.CSBA) >= 700 ? "#14532d" : Number(pessoa.score.CSBA) >= 400 ? "#1e3a5f" : "#450a0a",
+                                  color: Number(pessoa.score.CSBA) >= 700 ? "#4ade80" : Number(pessoa.score.CSBA) >= 400 ? "#60a5fa" : "#f87171"
+                                }}>Score {pessoa.score.CSBA}</span>
+                              )}
+                              <span className="text-xs text-blue-400 group-hover:text-blue-300">Selecionar →</span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Dados da pessoa selecionada */}
+                  {pessoaSelecionada && (
                     <div className="space-y-3">
+                      {/* Botão de troca quando há múltiplos resultados */}
+                      {consultaNomeResultados.length > 1 && (
+                        <button
+                          onClick={() => setPessoaSelecionada(null)}
+                          className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                        >
+                          ← Ver todos os {consultaNomeResultados.length} resultados
+                        </button>
+                      )}
+
                       {/* Dados Pessoais */}
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <p className="text-xs text-gray-500">Nome Completo</p>
-                          <p className="text-sm text-white font-semibold">{dadosCpf.nome}</p>
+                          <p className="text-sm text-white font-semibold">{pessoaSelecionada.nome}</p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">CPF</p>
-                          <p className="text-sm text-white font-mono">{dadosCpf.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</p>
+                          <p className="text-sm text-white font-mono">{pessoaSelecionada.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</p>
                         </div>
-                        {dadosCpf.nascimento && (
+                        {pessoaSelecionada.nascimento && (
                           <div>
                             <p className="text-xs text-gray-500">Nascimento</p>
-                            <p className="text-sm text-white">{dadosCpf.nascimento}</p>
+                            <p className="text-sm text-white">{pessoaSelecionada.nascimento}</p>
                           </div>
                         )}
-                        {dadosCpf.sexo && (
+                        {pessoaSelecionada.sexo && (
                           <div>
                             <p className="text-xs text-gray-500">Sexo</p>
-                            <p className="text-sm text-white">{dadosCpf.sexo === "M" ? "Masculino" : "Feminino"}</p>
-                          </div>
-                        )}
-                        {dadosCpf.estado_civil && (
-                          <div>
-                            <p className="text-xs text-gray-500">Estado Civil</p>
-                            <p className="text-sm text-white">{dadosCpf.estado_civil}</p>
+                            <p className="text-sm text-white">{pessoaSelecionada.sexo === "M" ? "Masculino" : "Feminino"}</p>
                           </div>
                         )}
                       </div>
 
                       {/* Filiação */}
-                      {dadosCpf.filiacao && (dadosCpf.filiacao.mae || dadosCpf.filiacao.pai) && (
+                      {(pessoaSelecionada.mae && pessoaSelecionada.mae !== "null") || (pessoaSelecionada.pai && pessoaSelecionada.pai !== "null") ? (
                         <div className="border-t border-blue-900/30 pt-2">
                           <p className="text-xs text-gray-500 mb-1">Filiação</p>
-                          {dadosCpf.filiacao.mae && <p className="text-xs text-gray-300">👩 Mãe: {dadosCpf.filiacao.mae}</p>}
-                          {dadosCpf.filiacao.pai && <p className="text-xs text-gray-300">👨 Pai: {dadosCpf.filiacao.pai}</p>}
+                          {pessoaSelecionada.mae && pessoaSelecionada.mae !== "null" && <p className="text-xs text-gray-300">👩 Mãe: {pessoaSelecionada.mae}</p>}
+                          {pessoaSelecionada.pai && pessoaSelecionada.pai !== "null" && <p className="text-xs text-gray-300">👨 Pai: {pessoaSelecionada.pai}</p>}
                         </div>
-                      )}
+                      ) : null}
 
                       {/* Score de Crédito */}
-                      {dadosCpf.score && (
+                      {pessoaSelecionada.score && (pessoaSelecionada.score.CSB8 || pessoaSelecionada.score.CSBA) && (
                         <div className="border-t border-blue-900/30 pt-2">
                           <p className="text-xs text-gray-500 mb-2">Score de Crédito</p>
                           <div className="flex gap-3">
-                            {dadosCpf.score.CSB8 && (
+                            {pessoaSelecionada.score.CSB8 && pessoaSelecionada.score.CSB8 !== "null" && (
                               <div className="bg-[#111128] rounded-lg px-3 py-2 text-center">
-                                <p className="text-lg font-bold text-yellow-400">{dadosCpf.score.CSB8}</p>
+                                <p className="text-lg font-bold text-yellow-400">{pessoaSelecionada.score.CSB8}</p>
                                 <p className="text-xs text-gray-500">CSB8</p>
-                                {dadosCpf.score.faixa_CSB8 && (
-                                  <p className="text-xs font-semibold mt-0.5" style={{
-                                    color: dadosCpf.score.faixa_CSB8 === "ALTISSIMO" ? "#f59e0b" :
-                                           dadosCpf.score.faixa_CSB8 === "ALTO" ? "#22c55e" :
-                                           dadosCpf.score.faixa_CSB8 === "MEDIO" ? "#3b82f6" :
-                                           dadosCpf.score.faixa_CSB8 === "BAIXO" ? "#ef4444" : "#9ca3af"
-                                  }}>{dadosCpf.score.faixa_CSB8}</p>
-                                )}
                               </div>
                             )}
-                            {dadosCpf.score.CSBA !== undefined && (
+                            {pessoaSelecionada.score.CSBA && pessoaSelecionada.score.CSBA !== "null" && (
                               <div className="bg-[#111128] rounded-lg px-3 py-2 text-center">
-                                <p className="text-lg font-bold text-blue-400">{dadosCpf.score.CSBA}</p>
+                                <p className="text-lg font-bold" style={{
+                                  color: Number(pessoaSelecionada.score.CSBA) >= 700 ? "#4ade80" :
+                                         Number(pessoaSelecionada.score.CSBA) >= 400 ? "#60a5fa" : "#f87171"
+                                }}>{pessoaSelecionada.score.CSBA}</p>
                                 <p className="text-xs text-gray-500">CSBA</p>
-                                {dadosCpf.score.faixa_CSBA && (
-                                  <p className="text-xs font-semibold mt-0.5" style={{
-                                    color: dadosCpf.score.faixa_CSBA === "ALTISSIMO" ? "#f59e0b" :
-                                           dadosCpf.score.faixa_CSBA === "ALTO" ? "#22c55e" :
-                                           dadosCpf.score.faixa_CSBA === "MEDIO" ? "#3b82f6" :
-                                           dadosCpf.score.faixa_CSBA === "BAIXO" ? "#ef4444" : "#9ca3af"
-                                  }}>{dadosCpf.score.faixa_CSBA}</p>
-                                )}
+                                <p className="text-xs font-semibold mt-0.5" style={{
+                                  color: Number(pessoaSelecionada.score.CSBA) >= 700 ? "#4ade80" :
+                                         Number(pessoaSelecionada.score.CSBA) >= 400 ? "#60a5fa" : "#f87171"
+                                }}>
+                                  {Number(pessoaSelecionada.score.CSBA) >= 700 ? "ALTO" :
+                                   Number(pessoaSelecionada.score.CSBA) >= 400 ? "MÉDIO" : "BAIXO"}
+                                </p>
                               </div>
                             )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Telefones da API CPF */}
-                      {dadosCpf.telefones && dadosCpf.telefones.total > 0 && (
-                        <div className="border-t border-blue-900/30 pt-2">
-                          <p className="text-xs text-gray-500 mb-2">📱 Telefones Atualizados ({dadosCpf.telefones.total})</p>
-                          <div className="flex flex-wrap gap-2">
-                            {dadosCpf.telefones.itens.map((tel, i) => (
-                              <a
-                                key={`cpf-tel-${i}`}
-                                href={`https://wa.me/55${tel.ddd}${tel.numero}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-1.5 bg-emerald-900/30 hover:bg-emerald-900/50 text-emerald-400 rounded-lg text-xs font-mono font-semibold flex items-center gap-1.5 transition-all border border-emerald-800/30"
-                              >
-                                📱 {tel.numero_completo}
-                              </a>
-                            ))}
                           </div>
                         </div>
                       )}
 
                       {/* Endereço */}
-                      {dadosCpf.enderecos && dadosCpf.enderecos.total > 0 && dadosCpf.enderecos.itens[0] && (
+                      {pessoaSelecionada.endereco && (
                         <div className="border-t border-blue-900/30 pt-2">
-                          <p className="text-xs text-gray-500 mb-1">📍 Endereço ({dadosCpf.enderecos.total} registro{dadosCpf.enderecos.total > 1 ? "s" : ""})</p>
-                          {(() => {
-                            const end = dadosCpf.enderecos!.itens[0];
-                            return (
-                              <p className="text-xs text-gray-300">
-                                {[end.tipo_logradouro, end.logradouro, end.numero].filter(Boolean).join(" ")}
-                                {end.bairro ? ` — ${end.bairro}` : ""}
-                                {end.cidade ? `, ${end.cidade}/${end.uf}` : ""}
-                                {end.cep ? ` — CEP ${end.cep}` : ""}
-                              </p>
-                            );
-                          })()}
+                          <p className="text-xs text-gray-500 mb-1">📍 Endereço</p>
+                          <p className="text-xs text-gray-300">
+                            {[pessoaSelecionada.endereco.tipo_logradouro, pessoaSelecionada.endereco.logradouro, pessoaSelecionada.endereco.numero,
+                              pessoaSelecionada.endereco.complemento && pessoaSelecionada.endereco.complemento !== "null" ? pessoaSelecionada.endereco.complemento : null
+                            ].filter(Boolean).join(" ")}
+                            {pessoaSelecionada.endereco.bairro ? ` — ${pessoaSelecionada.endereco.bairro}` : ""}
+                            {pessoaSelecionada.endereco.cidade ? `, ${pessoaSelecionada.endereco.cidade}/${pessoaSelecionada.endereco.uf}` : ""}
+                            {pessoaSelecionada.endereco.cep ? ` — CEP ${pessoaSelecionada.endereco.cep}` : ""}
+                          </p>
                         </div>
                       )}
                     </div>
