@@ -122,6 +122,26 @@ async function fetchTJSP(url: string): Promise<string> {
   return html;
 }
 
+// ─── Extrair total de páginas do HTML ────────────────────────────────────────
+function extrairPaginacao(html: string): { totalProcessos: number; totalPaginas: number; queryParams: string } {
+  const $ = cheerio.load(html);
+
+  // Contador de processos: <span id="contadorDeProcessos">98 Processos encontrados</span>
+  const contadorText = $("#contadorDeProcessos").first().text().trim();
+  const totalMatch = contadorText.match(/(\d+)/);
+  const totalProcessos = totalMatch ? parseInt(totalMatch[1]) : 0;
+
+  // Calcular total de páginas (25 por página)
+  const totalPaginas = Math.ceil(totalProcessos / 25);
+
+  // Extrair os parâmetros de busca da URL de paginação
+  // Exemplo: /trocarPagina.do?cbPesquisa=NUMOAB&dadosConsulta.valorConsulta=200287&cdForo=-1
+  const actionInput = $("input[name='action']").first().val() as string || "";
+  const queryParams = actionInput.replace(/^\/trocarPagina\.do\?/, "");
+
+  return { totalProcessos, totalPaginas, queryParams };
+}
+
 // ─── Extrair lista de processos do HTML ──────────────────────────────────────
 function extrairListaProcessos(html: string): ProcessoResumo[] {
   const $ = cheerio.load(html);
@@ -132,7 +152,6 @@ function extrairListaProcessos(html: string): ProcessoResumo[] {
   const foroMap: Map<string, string> = new Map();
   $("h2.foroDosProcessos").each((_, h2) => {
     const foroNome = $(h2).text().trim().replace(/\s+/g, " ");
-    // Pegar todos os divProcesso* que seguem este h2
     $(h2).nextAll("ul").first().find("div[id^='divProcesso']").each((_, div) => {
       const id = $(div).attr("id") || "";
       const codigo = id.replace("divProcesso", "");
@@ -153,7 +172,6 @@ function extrairListaProcessos(html: string): ProcessoResumo[] {
     const codigoProcesso = codigoMatch?.[1] || "";
     const foroProcesso = foroMatch?.[1] || "";
 
-    // Navegar até o container pai .home__lista-de-processos
     const container = link.closest(".home__lista-de-processos, .row");
 
     let classe = "";
@@ -165,7 +183,6 @@ function extrairListaProcessos(html: string): ProcessoResumo[] {
       classe = container.find(".classeProcesso").first().text().trim().replace(/\s+/g, " ");
       assunto = container.find(".assuntoPrincipalProcesso").first().text().trim().replace(/\s+/g, " ");
       const dataLocal = container.find(".dataLocalDistribuicaoProcesso").first().text().trim().replace(/\s+/g, " ");
-      // Formato: "12/08/2025 - Unidade 14 - Núcleo 4.0..."
       const dataParts = dataLocal.split(" - ");
       data = dataParts[0]?.trim() || "";
       vara = dataParts.slice(1).join(" - ").trim();
@@ -185,6 +202,9 @@ function extrairListaProcessos(html: string): ProcessoResumo[] {
       urlDetalhe: codigoProcesso
         ? `${TJSP_BASE}/cpopg/show.do?processo.codigo=${codigoProcesso}&processo.foro=${foroProcesso}`
         : "",
+      urlPastaDigital: codigoProcesso
+        ? `${TJSP_BASE}/pastadigital/abrirPastaProcessoDigital.do?nuProcesso=${encodeURIComponent(numero)}&cdProcesso=${codigoProcesso}`
+        : "",
       codigoProcesso,
       foroProcesso,
     });
@@ -193,14 +213,63 @@ function extrairListaProcessos(html: string): ProcessoResumo[] {
   return processos;
 }
 
+// ─── Buscar todas as páginas de uma consulta ─────────────────────────────────
+async function buscarTodasPaginas(
+  urlPrimeiraPagina: string,
+  cbPesquisa: string,
+  valorConsulta: string,
+  cdForo: string = "-1"
+): Promise<{ processos: ProcessoResumo[]; totalEncontrados: number }> {
+  // Buscar a primeira página
+  const htmlPag1 = await fetchTJSP(urlPrimeiraPagina);
+  const processosPag1 = extrairListaProcessos(htmlPag1);
+  const { totalProcessos, totalPaginas } = extrairPaginacao(htmlPag1);
+
+  console.log(`[TJSP] Total encontrados: ${totalProcessos} | Páginas: ${totalPaginas}`);
+
+  if (totalPaginas <= 1) {
+    return { processos: processosPag1, totalEncontrados: totalProcessos };
+  }
+
+  // Buscar páginas restantes em paralelo (máximo 10 páginas = 250 processos)
+  const maxPaginas = Math.min(totalPaginas, 10);
+  const paginasRestantes = Array.from({ length: maxPaginas - 1 }, (_, i) => i + 2);
+
+  const promessas = paginasRestantes.map(async (pagina) => {
+    const urlPagina = `${TJSP_BASE}/cpopg/trocarPagina.do?paginaConsulta=${pagina}&cbPesquisa=${cbPesquisa}&dadosConsulta.valorConsulta=${encodeURIComponent(valorConsulta)}&cdForo=${cdForo}`;
+    try {
+      const html = await fetchTJSP(urlPagina);
+      return extrairListaProcessos(html);
+    } catch (e) {
+      console.error(`[TJSP] Erro ao buscar página ${pagina}:`, e instanceof Error ? e.message : e);
+      return [];
+    }
+  });
+
+  const resultadosPaginas = await Promise.all(promessas);
+
+  // Juntar todos os processos, evitando duplicatas
+  const numerosVistos = new Set(processosPag1.map(p => p.numeroProcesso));
+  const todosProcessos = [...processosPag1];
+
+  for (const pagProcessos of resultadosPaginas) {
+    for (const p of pagProcessos) {
+      if (!numerosVistos.has(p.numeroProcesso)) {
+        numerosVistos.add(p.numeroProcesso);
+        todosProcessos.push(p);
+      }
+    }
+  }
+
+  return { processos: todosProcessos, totalEncontrados: totalProcessos };
+}
+
 // ─── Extrair detalhe do processo ──────────────────────────────────────────────
 function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetalhe {
   const $ = cheerio.load(html);
 
-  // Função auxiliar para extrair texto por id
   const byId = (id: string) => $(`#${id}`).first().text().trim().replace(/\s+/g, " ");
 
-  // Dados básicos - IDs reais do TJSP
   const numero = byId("numeroProcesso");
   const classe = byId("classeProcesso");
   const assunto = byId("assuntoProcesso");
@@ -211,6 +280,17 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
   const dataDistribuicao = byId("dataHoraDistribuicaoProcesso");
   const situacao = byId("situacaoProcesso");
 
+  // Extrair código do processo da URL
+  const codigoMatch = urlDetalhe.match(/processo\.codigo=([^&]+)/);
+  const foroMatch = urlDetalhe.match(/processo\.foro=([^&]+)/);
+  const codigoProcesso = codigoMatch?.[1] || "";
+  const foroProcesso = foroMatch?.[1] || "";
+
+  // URL da Pasta Digital
+  const urlPastaDigital = codigoProcesso && numero
+    ? `${TJSP_BASE}/pastadigital/abrirPastaProcessoDigital.do?nuProcesso=${encodeURIComponent(numero)}&cdProcesso=${codigoProcesso}`
+    : "";
+
   // Partes
   const partes: Parte[] = [];
   $("#tablePartesPrincipais tr").each((_, row) => {
@@ -219,15 +299,11 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
     if (!tipoEl.length || !nomeEl.length) return;
 
     const tipo = tipoEl.text().trim().replace(/\s+/g, " ").replace(/&nbsp;/g, "").trim();
-
-    // O nomeParteEAdvogado contém nome + advogados
     const nomeTexto = nomeEl.text().replace(/\s+/g, " ").trim();
 
-    // Separar nome da parte do advogado
     const advMatches = nomeTexto.match(/Advogado[:\s]+([^A-Z][^\n]+?)(?=\s*Advogado|$)/gi) || [];
     const advogados: string[] = advMatches.map(m => m.replace(/^Advogado[:\s]+/i, "").trim()).filter(Boolean);
 
-    // Nome da parte é o primeiro texto antes de "Advogado"
     const nomeParte = nomeTexto.split(/\s*Advogado[:\s]/i)[0].trim();
 
     if (nomeParte && tipo) {
@@ -257,7 +333,7 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
     const link = $(el);
     const titulo = link.text().trim().replace(/\s+/g, " ");
     const href = link.attr("href") || "";
-    if (titulo && !docsVistos.has(titulo)) {
+    if (titulo && !docsVistos.has(titulo) && !href.includes("liberarAutoPorSenha")) {
       docsVistos.add(titulo);
       documentos.push({
         titulo,
@@ -278,6 +354,9 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
     situacao,
     tribunal: "TJSP",
     urlDetalhe,
+    urlPastaDigital,
+    codigoProcesso,
+    foroProcesso,
     partes,
     movimentacoes,
     documentos,
@@ -285,25 +364,22 @@ function extrairDetalheProcesso(html: string, urlDetalhe: string): ProcessoDetal
 }
 
 // ─── API pública ──────────────────────────────────────────────────────────────
-export async function buscarPorOAB(oab: string): Promise<ProcessoResumo[]> {
+export async function buscarPorOAB(oab: string): Promise<{ processos: ProcessoResumo[]; totalEncontrados: number }> {
   const oabNum = oab.replace(/\D/g, "");
   const url = `${TJSP_BASE}/cpopg/search.do?conversationId=&cbPesquisa=NUMOAB&dadosConsulta.valorConsulta=${oabNum}&cdForo=-1`;
-  const html = await fetchTJSP(url);
-  return extrairListaProcessos(html);
+  return buscarTodasPaginas(url, "NUMOAB", oabNum, "-1");
 }
 
-export async function buscarPorCPFCNPJ(doc: string): Promise<ProcessoResumo[]> {
+export async function buscarPorCPFCNPJ(doc: string): Promise<{ processos: ProcessoResumo[]; totalEncontrados: number }> {
   const docNum = doc.replace(/\D/g, "");
   const url = `${TJSP_BASE}/cpopg/search.do?conversationId=&cbPesquisa=DOCPARTE&dadosConsulta.valorConsulta=${docNum}&cdForo=-1`;
-  const html = await fetchTJSP(url);
-  return extrairListaProcessos(html);
+  return buscarTodasPaginas(url, "DOCPARTE", docNum, "-1");
 }
 
-export async function buscarPorNumero(numero: string): Promise<ProcessoResumo[]> {
+export async function buscarPorNumero(numero: string): Promise<{ processos: ProcessoResumo[]; totalEncontrados: number }> {
   const numLimpo = numero.replace(/[^\d.-]/g, "");
   const url = `${TJSP_BASE}/cpopg/search.do?conversationId=&cbPesquisa=NUMPROC&dadosConsulta.valorConsulta=${encodeURIComponent(numLimpo)}&cdForo=-1`;
-  const html = await fetchTJSP(url);
-  return extrairListaProcessos(html);
+  return buscarTodasPaginas(url, "NUMPROC", numLimpo, "-1");
 }
 
 export async function obterDetalheProcesso(
@@ -313,6 +389,30 @@ export async function obterDetalheProcesso(
   const url = `${TJSP_BASE}/cpopg/show.do?processo.codigo=${codigoProcesso}&processo.foro=${foroProcesso}`;
   const html = await fetchTJSP(url);
   return extrairDetalheProcesso(html, url);
+}
+
+// ─── Proxy de documento (para download autenticado) ───────────────────────────
+export async function obterDocumento(url: string): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+  const cookies = await garantirCookies();
+  const resp = await fetch(url, {
+    headers: {
+      Cookie: cookies,
+      "User-Agent": USER_AGENT,
+      Accept: "application/pdf,text/html,*/*",
+      "Accept-Language": "pt-BR,pt;q=0.9",
+      Referer: TJSP_BASE,
+    },
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ao acessar documento`);
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+  const buffer = Buffer.from(await resp.arrayBuffer());
+
+  // Extrair nome do arquivo do header ou URL
+  const disposition = resp.headers.get("content-disposition") || "";
+  const filenameMatch = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+  const filename = filenameMatch ? filenameMatch[1].replace(/['"]/g, "") : "documento.pdf";
+
+  return { buffer, contentType, filename };
 }
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -326,6 +426,7 @@ export interface ProcessoResumo {
   valor: string;
   tribunal: string;
   urlDetalhe: string;
+  urlPastaDigital: string;
   codigoProcesso: string;
   foroProcesso: string;
 }
@@ -360,6 +461,9 @@ export interface ProcessoDetalhe {
   situacao: string;
   tribunal: string;
   urlDetalhe: string;
+  urlPastaDigital: string;
+  codigoProcesso: string;
+  foroProcesso: string;
   partes: Parte[];
   movimentacoes: Movimentacao[];
   documentos: Documento[];

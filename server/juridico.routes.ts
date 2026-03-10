@@ -5,6 +5,7 @@ import {
   buscarPorCPFCNPJ,
   buscarPorNumero,
   obterDetalheProcesso,
+  obterDocumento,
   setCookiesTJSP,
   statusCookies,
   garantirCookies,
@@ -21,20 +22,21 @@ router.get("/buscar", async (req: Request, res: Response) => {
   }
 
   try {
-    let processos;
+    let resultado;
     if (tipo === "oab") {
-      processos = await buscarPorOAB(query);
+      resultado = await buscarPorOAB(query);
     } else if (tipo === "cpf" || tipo === "cnpj" || tipo === "documento") {
-      processos = await buscarPorCPFCNPJ(query);
+      resultado = await buscarPorCPFCNPJ(query);
     } else if (tipo === "processo") {
-      processos = await buscarPorNumero(query);
+      resultado = await buscarPorNumero(query);
     } else {
       return res.status(400).json({ error: `Tipo de busca inválido: ${tipo}` });
     }
 
     return res.json({
-      total: processos.length,
-      processos,
+      total: resultado.processos.length,
+      totalEncontrados: resultado.totalEncontrados,
+      processos: resultado.processos,
       fonte: "TJSP",
     });
   } catch (err: unknown) {
@@ -108,6 +110,30 @@ router.post("/tjsp/auto-login", async (_req: Request, res: Response) => {
     return res.json({ ok: true, ...status });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+// ─── Proxy de documento do TJSP ─────────────────────────────────────────────
+router.get("/documento/proxy", async (req: Request, res: Response) => {
+  const { url } = req.query as { url?: string };
+
+  if (!url || !url.includes("esaj.tjsp.jus.br")) {
+    return res.status(400).json({ error: "URL inválida ou não autorizada" });
+  }
+
+  try {
+    const { buffer, contentType, filename } = await obterDocumento(url);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", buffer.length);
+    return res.send(buffer);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === "TJSP_SEM_AUTENTICACAO" || msg === "SESSAO_EXPIRADA") {
+      return res.status(401).json({ error: "SESSAO_EXPIRADA" });
+    }
+    console.error("[TJSP Documento]", msg);
     return res.status(500).json({ error: msg });
   }
 });

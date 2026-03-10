@@ -39,12 +39,14 @@ interface ProcessoTJSP {
   codigoProcesso?: string;
   foroProcesso?: string;
   urlDetalhe?: string;
+  urlPastaDigital?: string;
   detalheCarregado?: boolean;
   data?: string;
 }
 
 interface ResultadoBusca {
   total: number;
+  totalEncontrados?: number;
   processos: ProcessoTJSP[];
 }
 
@@ -202,6 +204,31 @@ export default function Painel() {
     return processosMap.get(processoAbertoId) ?? null;
   }, [processoAbertoId, processosMap]);
 
+  // Enriquecer processos com detalhes em background (lotes de 5)
+  const enriquecerEmBackground = useCallback(async (lista: ProcessoTJSP[]) => {
+    const comCodigo = lista.filter(p => p.codigoProcesso && !p.detalheCarregado);
+    const LOTE = 5;
+    for (let i = 0; i < comCodigo.length; i += LOTE) {
+      const lote = comCodigo.slice(i, i + LOTE);
+      await Promise.all(lote.map(async (p) => {
+        try {
+          const params = new URLSearchParams({ codigo: p.codigoProcesso!, foro: p.foroProcesso || "" });
+          const resp = await fetch(`/api/processo/detalhe?${params}`);
+          if (!resp.ok) return;
+          const detalhe: ProcessoTJSP = await resp.json();
+          setProcessosMap(prev => {
+            if (!prev.has(p.numeroProcesso)) return prev;
+            const novoMapa = new Map(prev);
+            novoMapa.set(p.numeroProcesso, { ...p, ...detalhe, numeroProcesso: p.numeroProcesso, detalheCarregado: true });
+            return novoMapa;
+          });
+        } catch { /* silencioso */ }
+      }));
+      // Pequena pausa entre lotes para não sobrecarregar o TJSP
+      if (i + LOTE < comCodigo.length) await new Promise(r => setTimeout(r, 500));
+    }
+  }, []);
+
   const buscar = useCallback(async () => {
     if (!query.trim()) {
       toast.error("Digite um valor para buscar");
@@ -240,20 +267,26 @@ export default function Painel() {
 
       setProcessosMap(novoMapa);
       setProcessosOrdem(novaOrdem);
-      setTotalResultados(data.total || lista.length);
+      const totalEnc = data.totalEncontrados || data.total || lista.length;
+      setTotalResultados(totalEnc);
 
       if (lista.length === 0) {
         toast.info("Nenhum processo encontrado");
+      } else if (totalEnc > lista.length) {
+        toast.success(`${lista.length} processo(s) carregados de ${totalEnc} encontrados no TJSP`);
       } else {
-        toast.success(`${lista.length} processo(s) encontrado(s) de ${data.total || lista.length} total`);
+        toast.success(`${lista.length} processo(s) encontrado(s)`);
       }
+
+      // Enriquecer com detalhes em background
+      enriquecerEmBackground(lista);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao buscar processos: " + msg);
     } finally {
       setCarregando(false);
     }
-  }, [query, tipoBusca]);
+  }, [query, tipoBusca, enriquecerEmBackground]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") buscar();
@@ -588,40 +621,64 @@ export default function Painel() {
                 <p className="text-sm mt-2">Verifique os dados informados e tente novamente.</p>
               </div>
             ) : (
-              processosFiltrados.map((p) => (
-                <div
-                  key={p.numeroProcesso}
-                  className="bg-[#0d0d1a] border border-[#1e1e2e] hover:border-indigo-800 rounded-xl p-4 cursor-pointer transition-all duration-200 hover:bg-[#111128]"
-                  onClick={() => abrirProcesso(p)}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 flex-wrap mb-2">
-                        <span className="text-indigo-400 font-mono text-sm font-bold">{p.numeroProcesso}</span>
-                        <span className="px-2 py-0.5 bg-indigo-900/40 text-indigo-300 rounded text-xs font-semibold">TJSP</span>
-                        {p.classe && (
-                          <span className="px-2 py-0.5 bg-[#1a1a2e] text-gray-400 rounded text-xs">{p.classe}</span>
+              processosFiltrados.map((p) => {
+                // Extrair parte passiva (executado/réu/requerido) e advogado
+                const partePassiva = p.partes?.find(pt => {
+                  const t = (pt.polo || pt.tipo || "").toLowerCase();
+                  return t.includes("execut") || t.includes("exectd") || t.includes("r\u00e9u") || t.includes("requerid") || t.includes("passiv") || t.includes("impetrad") || t.includes("reclamad");
+                }) || (p.partes && p.partes.length > 1 ? p.partes[p.partes.length - 1] : null);
+                const advogado = p.partes?.find(pt => pt.advogado)?.advogado || "";
+                return (
+                  <div
+                    key={p.numeroProcesso}
+                    className="bg-[#0d0d1a] border border-[#1e1e2e] hover:border-indigo-800 rounded-xl p-4 cursor-pointer transition-all duration-200 hover:bg-[#111128]"
+                    onClick={() => abrirProcesso(p)}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 flex-wrap mb-2">
+                          <span className="text-indigo-400 font-mono text-sm font-bold">{p.numeroProcesso}</span>
+                          <span className="px-2 py-0.5 bg-indigo-900/40 text-indigo-300 rounded text-xs font-semibold">TJSP</span>
+                          {p.classe && (
+                            <span className="px-2 py-0.5 bg-[#1a1a2e] text-gray-400 rounded text-xs">{p.classe}</span>
+                          )}
+                        </div>
+                        {p.assunto && (
+                          <p className="text-sm text-gray-300 truncate">{p.assunto}</p>
+                        )}
+                        {(p.vara || p.foro) && (
+                          <p className="text-xs text-gray-500 mt-1 truncate">🏙️ {p.vara || p.foro}</p>
+                        )}
+                        {partePassiva && (
+                          <div className="mt-2 flex flex-col gap-0.5">
+                            <p className="text-xs text-amber-400 truncate">
+                              <span className="text-gray-500">Indenizado: </span>
+                              <span className="font-semibold">{partePassiva.nome}</span>
+                            </p>
+                            {(partePassiva.documento || partePassiva.cpfCnpj) && (
+                              <p className="text-xs text-gray-500">
+                                CPF/CNPJ: {partePassiva.documento || partePassiva.cpfCnpj}
+                              </p>
+                            )}
+                            {advogado && (
+                              <p className="text-xs text-indigo-400 truncate">⚖️ {advogado.split(",")[0]}</p>
+                            )}
+                          </div>
                         )}
                       </div>
-                      {p.assunto && (
-                        <p className="text-sm text-gray-300 truncate">{p.assunto}</p>
-                      )}
-                      {(p.vara || p.foro) && (
-                        <p className="text-xs text-gray-500 mt-1 truncate">🏛️ {p.vara || p.foro}</p>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      {p.valor && (
-                        <p className="text-sm font-semibold text-emerald-400">{p.valor}</p>
-                      )}
-                      {(p.dataDistribuicao || p.data) && (
-                        <p className="text-xs text-gray-500 mt-1">{p.dataDistribuicao || p.data}</p>
-                      )}
-                      <span className="text-xs text-indigo-400 mt-2 block">Ver detalhes →</span>
+                      <div className="text-right shrink-0">
+                        {p.valor && (
+                          <p className="text-sm font-semibold text-emerald-400">{p.valor}</p>
+                        )}
+                        {(p.dataDistribuicao || p.data) && (
+                          <p className="text-xs text-gray-500 mt-1">{p.dataDistribuicao || p.data}</p>
+                        )}
+                        <span className="text-xs text-indigo-400 mt-2 block">Ver detalhes →</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}
@@ -802,14 +859,14 @@ export default function Painel() {
                   >
                     📜 OFÍCIO
                   </button>
-                  {processoAberto.urlDetalhe && (
+                  {processoAberto.urlPastaDigital && (
                     <a
-                      href={processoAberto.urlDetalhe}
+                      href={processoAberto.urlPastaDigital}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-3 py-2 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+                      className="px-3 py-2 bg-gradient-to-r from-teal-700 to-cyan-700 hover:from-teal-600 hover:to-cyan-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
                     >
-                      🔗 ABRIR NO TJSP
+                      📂 VISUALIZAR AUTOS
                     </a>
                   )}
                 </div>

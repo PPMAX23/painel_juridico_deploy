@@ -112,3 +112,10 @@
 - [x] Frontend atualizado para usar campos tipo/cpfCnpj/titulo dos novos tipos
 - [x] 30 testes vitest passando
 - [x] Correção do erro removeChild causado pelo Google Translate (translate=no no HTML/App)
+
+## Melhorias Fase 4 (Mar 2026)
+- [x] Paginação completa TJSP (todas as páginas, ex: 98 processos em 4 páginas)
+- [x] Dados enriquecidos na lista: indenizado, CPF/CNPJ, advogado (enriquecimento progressivo em background)
+- [x] Botão VISUALIZAR AUTOS com URL da Pasta Digital do TJSP
+- [x] Remoção do link externo ABRIR NO TJSP
+- [x] 31 testes vitest passando
