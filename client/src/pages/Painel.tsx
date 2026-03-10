@@ -97,14 +97,31 @@ interface StatusTJSP {
 function extrairTelefonesDeMovimentacoes(movimentacoes: MovimentacaoTJSP[]): string[] {
   const telefones: string[] = [];
   const vistos = new Set<string>();
-  const regex = /\(?\d{2}\)?[\s.-]?(?:9[\s.]?)?\d{4}[\s.-]?\d{4}/g;
+  // Regex estrita: exige contexto de telefone real
+  // Formato aceito: (11) 99999-9999 | (11) 9999-9999 | 11 99999-9999 | tel: 11999999999
+  // Rejeita: números de protocolo como WDDA.25.80028737
+  const regexContexto = /(?:tel(?:efone)?[.:]?|fone[.:]?|cel(?:ular)?[.:]?|contato[.:]?|whatsapp[.:]?|zap[.:]?)[\s]*\(?\s*(\d{2})\s*\)?[\s.-]?(?:9[\s.]?)?(\d{4})[\s.-]?(\d{4})/gi;
+  const regexFormatado = /\(\s*(\d{2})\s*\)\s*(?:9[\s.]?)?(\d{4})[\s.-](\d{4})/g;
+
   for (const mov of movimentacoes) {
-    const matches = mov.descricao.match(regex) || [];
-    for (const t of matches) {
-      const digits = t.replace(/\D/g, "");
+    const desc = mov.descricao;
+    // Tentar regex com contexto primeiro
+    let match;
+    const regexC = new RegExp(regexContexto.source, 'gi');
+    while ((match = regexC.exec(desc)) !== null) {
+      const digits = (match[1] + match[2] + match[3]).replace(/\D/g, "");
       if (digits.length >= 10 && digits.length <= 11 && !vistos.has(digits)) {
         vistos.add(digits);
-        telefones.push(t.trim());
+        telefones.push(`(${match[1]}) ${match[2]}-${match[3]}`);
+      }
+    }
+    // Tentar formato com parênteses obrigatórios
+    const regexF = new RegExp(regexFormatado.source, 'g');
+    while ((match = regexF.exec(desc)) !== null) {
+      const digits = (match[1] + match[2] + match[3]).replace(/\D/g, "");
+      if (digits.length >= 10 && digits.length <= 11 && !vistos.has(digits)) {
+        vistos.add(digits);
+        telefones.push(`(${match[1]}) ${match[2]}-${match[3]}`);
       }
     }
   }
@@ -490,9 +507,79 @@ export default function Painel() {
   };
 
   // Consultar API Supabase por nome da parte passiva
-  const consultarPorNome = useCallback(async (nome: string, processoId: string) => {
+  // Seleção automática inteligente: tenta identificar o indenizado correto entre múltiplos resultados
+  const selecionarAutomaticamente = useCallback((itens: PessoaEnriquecida[], processo?: ProcessoTJSP | null): PessoaEnriquecida | null => {
+    if (itens.length === 0) return null;
+    if (itens.length === 1) return itens[0];
+
+    // Extrair UF do processo a partir do foro ou vara
+    const foro = (processo?.foro || "").toLowerCase();
+    const vara = (processo?.vara || "").toLowerCase();
+    const contexto = foro + " " + vara;
+
+    // Mapa de cidades/estados mencionados no foro para UF
+    const ufMap: Record<string, string> = {
+      "são paulo": "SP", "sp": "SP", "campinas": "SP", "santos": "SP", "ribeirão preto": "SP",
+      "rio de janeiro": "RJ", "rj": "RJ", "niterói": "RJ",
+      "minas gerais": "MG", "mg": "MG", "belo horizonte": "MG",
+      "paraná": "PR", "pr": "PR", "curitiba": "PR",
+      "rio grande do sul": "RS", "rs": "RS", "porto alegre": "RS",
+      "bahia": "BA", "ba": "BA", "salvador": "BA",
+      "ceará": "CE", "ce": "CE", "fortaleza": "CE",
+      "pernambuco": "PE", "pe": "PE", "recife": "PE",
+      "goiás": "GO", "go": "GO", "goiânia": "GO",
+      "mato grosso": "MT", "mt": "MT",
+      "distrito federal": "DF", "df": "DF", "brasília": "DF",
+    };
+
+    // TJSP = SP por padrão (número do processo 8.26.xxxx)
+    let ufProcesso = "SP"; // TJSP é sempre SP
+    for (const [chave, uf] of Object.entries(ufMap)) {
+      if (contexto.includes(chave)) { ufProcesso = uf; break; }
+    }
+
+    // Pontuar cada candidato
+    const pontuados = itens.map(p => {
+      let score = 0;
+      const ufPessoa = p.endereco?.uf?.toUpperCase() || "";
+      const cidadePessoa = (p.endereco?.cidade || "").toLowerCase();
+
+      // +3 pontos se UF bate com o processo
+      if (ufPessoa === ufProcesso) score += 3;
+
+      // +2 pontos se cidade aparece no contexto do processo
+      if (cidadePessoa && contexto.includes(cidadePessoa)) score += 2;
+
+      // +1 ponto se nome é exatamente igual (sem variações)
+      if (p.nome.trim().toUpperCase() === p.nome.trim().toUpperCase()) score += 1;
+
+      // -2 pontos se parece ser empresa (tem Ltda, ME, SA, etc.)
+      const nomeLower = p.nome.toLowerCase();
+      if (nomeLower.includes("ltda") || nomeLower.includes(" me ") || nomeLower.includes(" sa ") || nomeLower.includes("eireli")) score -= 2;
+
+      return { pessoa: p, score };
+    });
+
+    // Ordenar por pontuação
+    pontuados.sort((a, b) => b.score - a.score);
+
+    // Se o melhor candidato tem pontuação > 0, selecionar automaticamente
+    if (pontuados[0].score > 0) return pontuados[0].pessoa;
+
+    // Caso contrário, retornar null para exibir lista manual
+    return null;
+  }, []);
+
+  const consultarPorNome = useCallback(async (nome: string, processoId: string, processo?: ProcessoTJSP | null) => {
     if (!nome || nome.trim().length < 3) return;
     if (consultaNomeProcesso === processoId) return; // já consultado para este processo
+
+    // Verificar se é empresa (não consultar CNPJ ou nome de empresa)
+    const nomeLower = nome.toLowerCase();
+    if (nomeLower.includes("ltda") || nomeLower.includes(" me ") || nomeLower.includes(" s/a") || nomeLower.includes(" sa ") || nomeLower.includes("eireli") || nomeLower.includes("fazenda") || nomeLower.includes("estado de") || nomeLower.includes("munícipio") || nomeLower.includes("prefeitura") || nomeLower.includes("banco ") || nomeLower.includes("financeira")) {
+      return; // Não consultar empresas/órgãos públicos
+    }
+
     setConsultaNomeCarregando(true);
     setConsultaNomeResultados([]);
     setPessoaSelecionada(null);
@@ -503,13 +590,31 @@ export default function Painel() {
       const data: ResultadoConsultaNome = await resp.json();
       if (data.itens && data.itens.length > 0) {
         setConsultaNomeResultados(data.itens);
-        // Se só houver 1 resultado, selecionar automaticamente
-        if (data.itens.length === 1) setPessoaSelecionada(data.itens[0]);
+        // Tentar seleção automática inteligente
+        const autoSelecionada = selecionarAutomaticamente(data.itens, processo);
+        if (autoSelecionada) {
+          // Selecionar automaticamente e buscar telefones
+          setPessoaSelecionada(autoSelecionada);
+          // Buscar telefones via CPF
+          const cpfLimpo = autoSelecionada.cpf.replace(/\D/g, "");
+          if (cpfLimpo.length === 11) {
+            setTelefonesCpfCarregando(true);
+            setTelefonesCpf([]);
+            fetch(`/api/consulta-cpf?cpf=${cpfLimpo}`)
+              .then(r => r.json())
+              .then(d => {
+                if (d.telefones?.itens?.length > 0) setTelefonesCpf(d.telefones.itens);
+              })
+              .catch(() => {})
+              .finally(() => setTelefonesCpfCarregando(false));
+          }
+        }
+        // Se não selecionou automaticamente, exibir lista para seleção manual
       }
     } catch { /* silencioso */ } finally {
       setConsultaNomeCarregando(false);
     }
-  }, [consultaNomeProcesso]);
+  }, [consultaNomeProcesso, selecionarAutomaticamente]);
 
   // Buscar telefones via CPF confirmado (após seleção de pessoa)
   const buscarTelefonesPorCPF = useCallback(async (cpf: string) => {
@@ -550,7 +655,7 @@ export default function Painel() {
       if (p.detalheCarregado && p.partes) {
         const passiva = p.partes.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
         const nomePassiva = passiva?.nome || "";
-        if (nomePassiva) consultarPorNome(nomePassiva, id);
+        if (nomePassiva) consultarPorNome(nomePassiva, id, p);
       }
       return;
     }
@@ -583,7 +688,7 @@ export default function Painel() {
       // Consultar API Supabase por nome da parte passiva
       const passiva = processoCompleto.partes?.find(pt => ehPartePassiva(pt.polo || pt.tipo || ""));
       const nomePassiva = passiva?.nome || "";
-      if (nomePassiva) consultarPorNome(nomePassiva, id);
+      if (nomePassiva) consultarPorNome(nomePassiva, id, processoCompleto);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
@@ -1066,15 +1171,26 @@ export default function Painel() {
                   {/* Dados da pessoa selecionada */}
                   {pessoaSelecionada && (
                     <div className="space-y-3">
-                      {/* Botão de troca quando há múltiplos resultados */}
-                      {consultaNomeResultados.length > 1 && (
-                        <button
-                          onClick={() => setPessoaSelecionada(null)}
-                          className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
-                        >
-                          ← Ver todos os {consultaNomeResultados.length} resultados
-                        </button>
-                      )}
+                      {/* Indicador de seleção automática ou manual */}
+                      <div className="flex items-center justify-between">
+                        {consultaNomeResultados.length > 1 ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-900/30 text-yellow-400 border border-yellow-700/30">
+                              ⚡ Selecionado automaticamente
+                            </span>
+                            <button
+                              onClick={() => setPessoaSelecionada(null)}
+                              className="text-xs text-blue-400 hover:text-blue-300 underline"
+                            >
+                              Trocar ({consultaNomeResultados.length} resultados)
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/30 text-green-400 border border-green-700/30">
+                            ✅ Único resultado encontrado
+                          </span>
+                        )}
+                      </div>
 
                       {/* Dados Pessoais */}
                       <div className="grid grid-cols-2 gap-2">
