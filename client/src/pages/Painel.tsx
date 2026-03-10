@@ -243,33 +243,27 @@ export default function Painel() {
   const [zapValidando, setZapValidando] = useState<Record<string, boolean>>({});
   const [zapResultados, setZapResultados] = useState<Record<string, boolean>>({});
 
-  // Verificar status do token ao carregar
+  // Verificar status do token ao carregar e atualizar timer
   useEffect(() => {
-    fetch("/api/token/status")
-      .then(r => r.json())
-      .then(data => {
-        if (!data.valido) {
-          toast.error("Sessão expirada! Renovando acesso...");
-          setTimeout(() => { window.location.href = "/login"; }, 1500);
-        } else {
+    const verificarToken = () => {
+      fetch("/api/token/status")
+        .then(r => r.json())
+        .then(data => {
+          // O servidor renova automaticamente - apenas atualizar o timer
           setTempoSessao(data.tempoRestante || 30 * 60);
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    };
+    verificarToken();
+    // Verificar a cada 60 segundos para atualizar o timer
+    const interval = setInterval(verificarToken, 60000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Timer
+  // Timer de contagem regressiva (apenas visual)
   useEffect(() => {
     const interval = setInterval(() => {
-      setTempoSessao(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          toast.error("Sessão expirada! Faça login novamente.");
-          window.location.href = "/login";
-          return 0;
-        }
-        return prev - 1;
-      });
+      setTempoSessao(prev => Math.max(0, prev - 1));
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -353,14 +347,17 @@ export default function Painel() {
         toast.success(`${lista.length} processo(s) encontrado(s)`);
       }
     } catch (err: any) {
-      if (err.message?.includes("401") || err.message?.includes("TOKEN_EXPIRADO")) {
-        toast.error("Sessão expirada! Redirecionando...");
-        setTimeout(() => { window.location.href = "/login"; }, 1500);
+      if (err.message?.includes("401") || err.message?.includes("TOKEN_EXPIRADO") || err.message?.includes("503") || err.message?.includes("TOKEN_INDISPONIVEL")) {
+        toast.info("⏳ Renovando sessão automaticamente... Aguarde.");
+        // Aguardar 5 segundos e tentar novamente
+        setTimeout(() => {
+          setCarregando(false);
+          buscar();
+        }, 5000);
       } else {
         toast.error("Erro ao buscar processos: " + err.message);
+        setCarregando(false);
       }
-    } finally {
-      setCarregando(false);
     }
   };
 

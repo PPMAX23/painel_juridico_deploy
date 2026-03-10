@@ -1,44 +1,19 @@
 import { Router, Request, Response } from "express";
 import { invokeLLM } from "./_core/llm";
+import { garantirToken, getTokenStatus, setTokenManual, iniciarAutoLogin } from "./auto-login";
 
 const router = Router();
+const API_BASE = "http://191.101.131.161";
 
-// ─── Gerenciamento de Token ────────────────────────────────────────────────────
-// O token JWT do painel original é armazenado aqui e renovado conforme necessário
-let tokenAtual: string | null = null;
-let tokenExpiracao: number = 0;
-
-function setToken(token: string) {
-  tokenAtual = token;
-  // Decodificar o JWT para pegar a expiração
-  try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64").toString());
-    tokenExpiracao = (payload.exp || 0) * 1000; // converter para ms
-    console.log(`[Token] Novo token configurado, expira em: ${new Date(tokenExpiracao).toLocaleString("pt-BR")}`);
-  } catch {
-    tokenExpiracao = Date.now() + 25 * 60 * 1000; // fallback: 25 min
-  }
-}
-
-function getToken(): string | null {
-  if (!tokenAtual) return null;
-  // Verificar se o token ainda é válido (com 2 min de margem)
-  if (Date.now() > tokenExpiracao - 2 * 60 * 1000) {
-    console.log("[Token] Token expirado ou prestes a expirar");
-    return null;
-  }
-  return tokenAtual;
-}
-
-// Inicializar com o token atual (capturado do browser)
-const TOKEN_INICIAL = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IkFEVl81NTIiLCJzZXNzaW9uX2lkIjoiNTBhMzRiN2ItNGVlNy00NDliLWI2YTgtOWY2YzY4NGM3NGVjIiwiaWF0IjoxNzczMTA0OTY3LCJleHAiOjE3NzMxMDY3Njd9.bgmeO8v_V1eudG4gCyM_jj_9rXxudqmo4vdzNy-Ue6Q";
-setToken(TOKEN_INICIAL);
+// Iniciar o serviço de auto-login quando as rotas forem carregadas
+iniciarAutoLogin().catch(e => console.error("[AutoLogin] Falha na inicialização:", e.message));
 
 // ─── Função auxiliar para fazer requisições autenticadas ──────────────────────
 async function fetchComToken(url: string, options: RequestInit = {}): Promise<globalThis.Response> {
-  const token = getToken();
+  // Garantir token válido (renova automaticamente se necessário)
+  const token = await garantirToken();
   if (!token) {
-    throw new Error("TOKEN_EXPIRADO");
+    throw new Error("TOKEN_INDISPONIVEL");
   }
   
   return fetch(url, {
@@ -53,25 +28,20 @@ async function fetchComToken(url: string, options: RequestInit = {}): Promise<gl
   });
 }
 
-// ─── Endpoint para atualizar o token ──────────────────────────────────────────
+// ─── Endpoint para atualizar o token manualmente (fallback) ──────────────────
 router.post("/token/atualizar", (req: Request, res: Response) => {
   const { token } = req.body;
   if (!token) {
     return res.status(400).json({ error: "Token é obrigatório" });
   }
-  setToken(token);
-  return res.json({ ok: true, expiracao: new Date(tokenExpiracao).toISOString() });
+  setTokenManual(token);
+  const status = getTokenStatus();
+  return res.json({ ok: true, expiracao: status.expiracao });
 });
 
 // Verificar status do token
 router.get("/token/status", (_req: Request, res: Response) => {
-  const token = getToken();
-  const tempoRestante = Math.max(0, Math.floor((tokenExpiracao - Date.now()) / 1000));
-  return res.json({
-    valido: !!token,
-    tempoRestante,
-    expiracao: tokenExpiracao ? new Date(tokenExpiracao).toISOString() : null,
-  });
+  return res.json(getTokenStatus());
 });
 
 // ─── Proxy para a API de busca jurídica ───────────────────────────────────────
@@ -97,8 +67,8 @@ router.get("/buscar", async (req: Request, res: Response) => {
     const data = await response.json();
     return res.json(data);
   } catch (error: any) {
-    if (error.message === "TOKEN_EXPIRADO") {
-      return res.status(401).json({ error: "TOKEN_EXPIRADO", message: "Sessão expirada. Faça login novamente." });
+    if (error.message === "TOKEN_INDISPONIVEL") {
+      return res.status(503).json({ error: "TOKEN_INDISPONIVEL", message: "Sistema de autenticação temporariamente indisponível. Tente novamente em instantes." });
     }
     console.error("Erro ao buscar processos:", error);
     return res.status(500).json({ error: "Erro interno ao consultar processos", message: error.message });
@@ -124,23 +94,23 @@ router.get("/consulta-nacional", async (req: Request, res: Response) => {
     const data = await response.json();
     return res.json(data);
   } catch (error: any) {
-    if (error.message === "TOKEN_EXPIRADO") {
-      return res.status(401).json({ error: "TOKEN_EXPIRADO", message: "Sessão expirada." });
+    if (error.message === "TOKEN_INDISPONIVEL") {
+      return res.status(503).json({ error: "TOKEN_INDISPONIVEL", message: "Autenticação temporariamente indisponível." });
     }
     console.error("Erro na consulta nacional:", error);
     return res.status(500).json({ error: "Erro interno", message: error.message });
   }
 });
 
-// ─── Validar WhatsApp ─────────────────────────────────────────────────────────
+// // ─── Validar WhatsApp ────────────────────────────────────────────────────
 router.post("/whatsapp/validar", async (req: Request, res: Response) => {
   try {
-    const token = getToken();
+    const token = await garantirToken();
     if (!token) {
-      return res.status(401).json({ error: "TOKEN_EXPIRADO" });
+      return res.status(503).json({ error: "TOKEN_INDISPONIVEL" });
     }
 
-    const apiUrl = `http://191.101.131.161/api/whatsapp/validar`;
+    const apiUrl = `${API_BASE}/api/whatsapp/validar`;
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
@@ -160,14 +130,14 @@ router.post("/whatsapp/validar", async (req: Request, res: Response) => {
   }
 });
 
-// ─── Foto do advogado ─────────────────────────────────────────────────────────
+//// ─── Foto do advogado ────────────────────────────────────────────────────
 router.get("/foto-adv", async (req: Request, res: Response) => {
   const { uf, num } = req.query as { uf: string; num: string };
 
   try {
-    const token = getToken();
+    const token = await garantirToken();
     const cookieHeader = token ? `token=${token}` : "";
-    const apiUrl = `http://191.101.131.161/api/foto-adv?uf=${uf}&num=${num}`;
+    const apiUrl = `${API_BASE}/api/foto-adv?uf=${uf}&num=${num}`;
     
     const response = await fetch(apiUrl, {
       headers: { "Cookie": cookieHeader },

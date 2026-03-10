@@ -201,3 +201,73 @@ describe("Validação de parâmetros de busca", () => {
     expect(query.trim().length).toBe(0);
   });
 });
+
+describe("Auto-Login e Renovação Automática", () => {
+  it("deve detectar token expirado corretamente", () => {
+    const passado = Math.floor(Date.now() / 1000) - 60;
+    const payload = { username: "ADV_552", exp: passado };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64");
+    const token = `header.${encoded}.signature`;
+    const { expiracao } = setToken(token);
+    expect(isTokenValido(expiracao)).toBe(false);
+  });
+
+  it("deve detectar token quase expirando (menos de 2 min)", () => {
+    const quaseExp = Math.floor(Date.now() / 1000) + 90; // 1.5 min no futuro
+    const payload = { username: "ADV_552", exp: quaseExp };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64");
+    const token = `header.${encoded}.signature`;
+    const { expiracao } = setToken(token);
+    // Menos de 2 minutos = inválido (precisa renovar)
+    expect(isTokenValido(expiracao)).toBe(false);
+  });
+
+  it("deve aceitar token com mais de 2 minutos de validade", () => {
+    const valido = Math.floor(Date.now() / 1000) + 200; // ~3.3 min no futuro
+    const payload = { username: "ADV_552", exp: valido };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64");
+    const token = `header.${encoded}.signature`;
+    const { expiracao } = setToken(token);
+    expect(isTokenValido(expiracao)).toBe(true);
+  });
+
+  it("deve processar token JWT real com campos corretos", () => {
+    // Simular estrutura de JWT do painel de origem
+    const payload = {
+      username: "ADV_552",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 1800 // 30 min
+    };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64");
+    const token = `eyJhbGciOiJIUzI1NiJ9.${encoded}.signature`;
+    const { expiracao } = setToken(token);
+    expect(expiracao).toBeGreaterThan(Date.now());
+    expect(isTokenValido(expiracao)).toBe(true);
+  });
+});
+
+describe("Limpeza de CAPTCHA SVG", () => {
+  it("deve remover paths com fill=none do SVG", () => {
+    const svg = '<svg><path fill="#18181b"/><path fill="none" d="M1 2"/><path fill="#ff0000" d="M3 4"/></svg>';
+    const clean = svg.replace(/fill="#18181b"/g, 'fill="white"')
+                     .replace(/<path fill="none"[^/]*\/>/g, '');
+    expect(clean).not.toContain('fill="none"');
+    expect(clean).toContain('fill="white"');
+    expect(clean).toContain('fill="#ff0000"');
+  });
+
+  it("deve substituir fundo escuro por branco", () => {
+    const svg = '<svg><rect fill="#18181b" width="100%" height="100%"/></svg>';
+    const clean = svg.replace(/fill="#18181b"/g, 'fill="white"');
+    expect(clean).toContain('fill="white"');
+    expect(clean).not.toContain('#18181b');
+  });
+
+  it("deve preservar paths de caracteres após limpeza", () => {
+    const svg = '<svg><rect fill="#18181b"/><path fill="none" d="M1 2"/><path fill="#7fd22c" d="M10 20"/></svg>';
+    const clean = svg.replace(/fill="#18181b"/g, 'fill="white"')
+                     .replace(/<path fill="none"[^/]*\/>/g, '');
+    expect(clean).toContain('fill="#7fd22c"');
+    expect(clean).not.toContain('fill="none"');
+  });
+});

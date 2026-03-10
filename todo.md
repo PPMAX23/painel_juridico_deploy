@@ -76,10 +76,12 @@
 - [ ] Scrollbar customizada
 
 ## Segurança
-- [x] Expiração automática de sessão (timer 30 min)
-- [x] Redirecionamento ao expirar sessão
-- [x] Sistema de token JWT com renovação
+- [x] Timer de sessão visual (apenas informativo)
+- [x] Sistema de token JWT com renovação automática
+- [x] Auto-login via worker Python com cairosvg + IA de visão
 
 ## Pendente
-- [ ] Página de login própria do novo painel
-- [ ] Sistema de renovação automática de token (sem precisar logar no painel original)
+- [x] Sistema de renovação automática de token com IA (sem precisar logar manualmente)
+- [x] Auto-login com resolução de CAPTCHA via IA de visão
+- [x] Frontend sem tela de login (renovação transparente)
+- [x] Retry automático até 3 tentativas se CAPTCHA errado
