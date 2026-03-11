@@ -619,6 +619,9 @@ router.post("/webhook/whatsapp", async (req: Request, res: Response) => {
   try {
     const body = req.body;
 
+    // Log completo do payload para diagnóstico
+    console.log("[WEBHOOK-RAW]", JSON.stringify(body).substring(0, 500));
+
     // Ignorar mensagens enviadas pelo próprio bot
     if (!body || body.isFromMe === true) {
       return res.status(200).json({ ok: true });

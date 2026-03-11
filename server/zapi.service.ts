@@ -1,13 +1,15 @@
 // ─── Serviço Z-API — Envio de mensagens WhatsApp ─────────────────────────────
 
-const ZAPI_BASE = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
-const CLIENT_TOKEN = process.env.ZAPI_CLIENT_TOKEN || "";
+// URL e token construídos dinamicamente para garantir que as env vars estejam carregadas
+function getZapiBase(): string {
+  return `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
+}
 
 // Cabeçalhos padrão para todas as requisições Z-API
 function headers() {
   return {
     "Content-Type": "application/json",
-    "Client-Token": CLIENT_TOKEN,
+    "Client-Token": process.env.ZAPI_CLIENT_TOKEN || "",
   };
 }
 
@@ -23,7 +25,7 @@ export function normalizarTelefone(numero: string): string {
 export async function enviarTexto(telefone: string, mensagem: string): Promise<boolean> {
   try {
     const phone = normalizarTelefone(telefone);
-    const res = await fetch(`${ZAPI_BASE}/send-text`, {
+    const res = await fetch(`${getZapiBase()}/send-text`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ phone, message: mensagem }),
@@ -43,7 +45,7 @@ export async function enviarTexto(telefone: string, mensagem: string): Promise<b
 // Envia mensagem de texto para um grupo
 export async function enviarTextoGrupo(grupoId: string, mensagem: string): Promise<boolean> {
   try {
-    const res = await fetch(`${ZAPI_BASE}/send-text`, {
+    const res = await fetch(`${getZapiBase()}/send-text`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify({ phone: grupoId, message: mensagem }),
@@ -64,7 +66,7 @@ export async function enviarTextoGrupo(grupoId: string, mensagem: string): Promi
 export async function verificarWhatsApp(telefone: string): Promise<boolean> {
   try {
     const phone = normalizarTelefone(telefone);
-    const res = await fetch(`${ZAPI_BASE}/phone-exists/${phone}`, {
+    const res = await fetch(`${getZapiBase()}/phone-exists/${phone}`, {
       headers: headers(),
     });
     const data = await res.json() as { exists?: boolean };
@@ -77,7 +79,7 @@ export async function verificarWhatsApp(telefone: string): Promise<boolean> {
 // Verifica status da conexão
 export async function verificarConexao(): Promise<{ conectado: boolean; smartphoneConectado: boolean }> {
   try {
-    const res = await fetch(`${ZAPI_BASE}/status`, { headers: headers() });
+    const res = await fetch(`${getZapiBase()}/status`, { headers: headers() });
     const data = await res.json() as { connected?: boolean; smartphoneConnected?: boolean };
     return {
       conectado: data.connected === true,
