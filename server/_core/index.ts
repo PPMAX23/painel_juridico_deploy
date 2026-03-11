@@ -11,6 +11,16 @@ import { serveStatic, setupVite } from "./vite";
 import juridicoRoutes from "../juridico.routes";
 import { inicializarCookiesPermanentes } from "../tjsp-http.service";
 
+// Domínios permitidos para CORS
+const DOMINIOS_CORS = [
+  "https://acesso-cliente.sbs",
+  "https://www.acesso-cliente.sbs",
+  "https://paineljuridico.casa",
+  "https://www.paineljuridico.casa",
+  "https://paineladv.manus.space",
+  "https://juridicodash-whi5vaqx.manus.space",
+];
+
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
@@ -33,6 +43,21 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+
+  // CORS — permite que acesso-cliente.sbs chame a API do servidor principal
+  app.use((req, res, next) => {
+    const origin = req.headers.origin as string;
+    if (origin && DOMINIOS_CORS.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
 
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
