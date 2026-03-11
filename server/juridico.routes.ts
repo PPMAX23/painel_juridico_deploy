@@ -1,6 +1,12 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { invokeLLM } from "./_core/llm";
 import { obterDDDsPorForo, filtrarPessoasPorDDD } from "./foro-ddd";
+import {
+  verificarSenhaAdmin, verificarTOTP, obterQRCodeTOTP, ativarTOTP, desativarTOTP,
+  alterarSenhaAdmin, inicializarAdminConfig,
+  listarUsuarios, criarUsuario, atualizarUsuario, revogarUsuario, deletarUsuario, regenerarToken,
+  validarToken, registrarLog, listarLogs, estatisticasUsuario,
+} from "./acesso.service";
 import {
   buscarPorOAB,
   buscarPorCPFCNPJ,
@@ -406,4 +412,162 @@ router.get("/consulta-cpf", async (req: Request, res: Response) => {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({ error: msg });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GESTÃO DE ACESSO — Admin + Usuários da Equipe
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const adminOk = (req as any).session?.adminAutenticado === true;
+  if (!adminOk) return res.status(401).json({ error: "Não autorizado" });
+  next();
+}
+
+// ─── Login Admin ──────────────────────────────────────────────────────────────
+router.post("/admin/login", async (req: Request, res: Response) => {
+  const { senha, totp } = req.body;
+  if (!senha) return res.status(400).json({ error: "Senha obrigatória" });
+  const senhaOk = await verificarSenhaAdmin(senha);
+  if (!senhaOk) return res.status(401).json({ error: "Senha incorreta" });
+  const totpOk = await verificarTOTP(totp || "");
+  if (!totpOk) return res.status(401).json({ error: "Código autenticador inválido" });
+  (req as any).session.adminAutenticado = true;
+  await registrarLog({ acao: "login-admin", ip: req.ip, userAgent: req.headers["user-agent"] as string });
+  return res.json({ ok: true });
+});
+
+router.post("/admin/logout", (req: Request, res: Response) => {
+  (req as any).session.adminAutenticado = false;
+  return res.json({ ok: true });
+});
+
+router.get("/admin/status", (req: Request, res: Response) => {
+  return res.json({ autenticado: (req as any).session?.adminAutenticado === true });
+});
+
+// ─── Configuração Admin ───────────────────────────────────────────────────────
+router.post("/admin/inicializar", async (req: Request, res: Response) => {
+  const { senha } = req.body;
+  if (!senha) return res.status(400).json({ error: "Senha obrigatória" });
+  const config = await inicializarAdminConfig(senha);
+  return res.json({ ok: true, totpEnabled: config?.totpEnabled });
+});
+
+router.post("/admin/alterar-senha", requireAdmin, async (req: Request, res: Response) => {
+  const { novaSenha } = req.body;
+  if (!novaSenha || novaSenha.length < 4) return res.status(400).json({ error: "Senha muito curta" });
+  await alterarSenhaAdmin(novaSenha);
+  return res.json({ ok: true });
+});
+
+router.get("/admin/totp/qrcode", requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const data = await obterQRCodeTOTP();
+    return res.json(data);
+  } catch (e: any) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+router.post("/admin/totp/ativar", requireAdmin, async (req: Request, res: Response) => {
+  const { codigo } = req.body;
+  const ok = await ativarTOTP(codigo || "");
+  if (!ok) return res.status(400).json({ error: "Código inválido" });
+  return res.json({ ok: true });
+});
+
+router.post("/admin/totp/desativar", requireAdmin, async (req: Request, res: Response) => {
+  await desativarTOTP();
+  return res.json({ ok: true });
+});
+
+// ─── Gestão de Usuários ───────────────────────────────────────────────────────
+router.get("/admin/usuarios", requireAdmin, async (req: Request, res: Response) => {
+  const usuarios = await listarUsuarios();
+  const comStats = await Promise.all(usuarios.map(async (u) => {
+    const stats = await estatisticasUsuario(u.id);
+    return { ...u, ...stats };
+  }));
+  return res.json(comStats);
+});
+
+router.post("/admin/usuarios", requireAdmin, async (req: Request, res: Response) => {
+  const { nome, email, permBuscar, permEnriquecimento, permAlvara, permOficio, permIA, limiteConsultasDia, expiresAt } = req.body;
+  if (!nome) return res.status(400).json({ error: "Nome obrigatório" });
+  const usuario = await criarUsuario({
+    nome, email,
+    permBuscar: permBuscar ?? true,
+    permEnriquecimento: permEnriquecimento ?? true,
+    permAlvara: permAlvara ?? false,
+    permOficio: permOficio ?? false,
+    permIA: permIA ?? true,
+    limiteConsultasDia: limiteConsultasDia ?? 50,
+    expiresAt: expiresAt ? new Date(expiresAt) : null,
+  });
+  return res.json(usuario);
+});
+
+router.put("/admin/usuarios/:id", requireAdmin, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  const usuario = await atualizarUsuario(id, req.body);
+  return res.json(usuario);
+});
+
+router.post("/admin/usuarios/:id/revogar", requireAdmin, async (req: Request, res: Response) => {
+  await revogarUsuario(parseInt(req.params.id));
+  return res.json({ ok: true });
+});
+
+router.post("/admin/usuarios/:id/ativar", requireAdmin, async (req: Request, res: Response) => {
+  await atualizarUsuario(parseInt(req.params.id), { ativo: true });
+  return res.json({ ok: true });
+});
+
+router.delete("/admin/usuarios/:id", requireAdmin, async (req: Request, res: Response) => {
+  await deletarUsuario(parseInt(req.params.id));
+  return res.json({ ok: true });
+});
+
+router.post("/admin/usuarios/:id/regenerar-token", requireAdmin, async (req: Request, res: Response) => {
+  const novoToken = await regenerarToken(parseInt(req.params.id));
+  return res.json({ token: novoToken });
+});
+
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+router.get("/admin/logs", requireAdmin, async (req: Request, res: Response) => {
+  const usuarioId = req.query.usuarioId ? parseInt(req.query.usuarioId as string) : undefined;
+  const limite = req.query.limite ? parseInt(req.query.limite as string) : 100;
+  const logs = await listarLogs(limite, usuarioId);
+  return res.json(logs);
+});
+
+// ─── Validação de Token (para usuários da equipe) ─────────────────────────────
+router.post("/acesso/validar", async (req: Request, res: Response) => {
+  const { token } = req.body;
+  const resultado = await validarToken(token || "");
+  if (!resultado.valido) {
+    return res.status(401).json({ valido: false, motivo: resultado.motivo });
+  }
+  const u = resultado.usuario!;
+  await registrarLog({
+    usuarioId: u.id,
+    usuarioNome: u.nome,
+    acao: "login",
+    ip: req.ip,
+    userAgent: req.headers["user-agent"] as string,
+  });
+  return res.json({
+    valido: true,
+    usuario: {
+      id: u.id,
+      nome: u.nome,
+      permBuscar: u.permBuscar,
+      permEnriquecimento: u.permEnriquecimento,
+      permAlvara: u.permAlvara,
+      permOficio: u.permOficio,
+      permIA: u.permIA,
+      limiteConsultasDia: u.limiteConsultasDia,
+    },
+  });
 });
