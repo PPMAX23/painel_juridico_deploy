@@ -9,6 +9,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import juridicoRoutes from "../juridico.routes";
+import { inicializarCookiesPermanentes } from "../tjsp-http.service";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -74,6 +75,8 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    // Inicializar cookies TJSP permanentes imediatamente ao subir o servidor
+    inicializarCookiesPermanentes();
   });
 }
 

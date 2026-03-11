@@ -54,11 +54,17 @@ function iniciarKeepAlive() {
       });
       const html = await resp.text();
       if (html.includes("sajcas/login") || html.includes('id="usernameForm"')) {
-        console.log("[TJSP] Keep-alive: sessão expirada no servidor TJSP.");
+        console.log("[TJSP] Keep-alive: sessão expirada no servidor TJSP. Tentando renovar com cookie permanente...");
         cookiesAtivos = "";
         cookiesExpiram = 0;
         clearInterval(keepAliveTimer!);
         keepAliveTimer = null;
+        // Tentar renovar automaticamente com o cookie permanente
+        const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+        if (cookiePermanente && cookiePermanente.trim()) {
+          console.log("[TJSP] Renovando automaticamente com TJSP_COOKIE_PERMANENTE...");
+          setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
+        }
       } else {
         renovarTTLLocal();
         console.log(`[TJSP] Keep-alive OK. Sessão ativa até ${new Date(cookiesExpiram).toLocaleTimeString("pt-BR")}`);
@@ -139,13 +145,32 @@ main().catch(e => { console.error('ERRO:' + e.message); process.exit(1); });
 // ─── Garantir cookies válidos ─────────────────────────────────────────────────
 export async function garantirCookies(): Promise<string> {
   if (cookiesValidos()) return cookiesAtivos;
-  // Tentar capturar via Puppeteer (apenas funciona no sandbox)
+
+  // 1º: Tentar cookie permanente salvo como variável de ambiente
+  const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+  if (cookiePermanente && cookiePermanente.trim()) {
+    console.log("[TJSP] Usando cookie permanente da variável de ambiente TJSP_COOKIE_PERMANENTE");
+    setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
+    return cookiesAtivos;
+  }
+
+  // 2º: Tentar capturar via Puppeteer (apenas funciona no sandbox)
   try {
     console.log("[TJSP] Capturando cookies via Puppeteer...");
     return await capturarCookiesPuppeteer();
   } catch (e) {
     console.error("[TJSP] Puppeteer indisponível:", e instanceof Error ? e.message : e);
     throw new Error("TJSP_SEM_AUTENTICACAO");
+  }
+}
+
+// ─── Inicializar cookies permanentes na inicialização do servidor ───────────────
+// Chamado uma vez quando o servidor inicia para garantir que os cookies estão ativos
+export function inicializarCookiesPermanentes(): void {
+  const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+  if (cookiePermanente && cookiePermanente.trim()) {
+    console.log("[TJSP] Inicializando cookies permanentes da variável de ambiente...");
+    setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
   }
 }
 

@@ -124,6 +124,20 @@ router.post("/tjsp/cookies", async (req: Request, res: Response) => {
   return res.json({ ok: true, ...status });
 });
 
+// ─── Salvar cookie como permanente (atualiza env em tempo de execução) ─────────────
+router.post("/tjsp/cookies/permanente", requireAdmin, async (req: Request, res: Response) => {
+  const { cookies } = req.body as { cookies: string };
+  if (!cookies || typeof cookies !== "string" || cookies.trim().length < 10) {
+    return res.status(400).json({ error: "Cookies inválidos ou muito curtos" });
+  }
+  // Atualizar a variável de ambiente em tempo de execução (persiste até o servidor reiniciar)
+  process.env.TJSP_COOKIE_PERMANENTE = cookies.trim();
+  setCookiesTJSP(cookies.trim(), 12 * 60 * 60 * 1000);
+  console.log("[TJSP] Cookie permanente atualizado via painel admin.");
+  const status = statusCookies();
+  return res.json({ ok: true, mensagem: "Cookie salvo como permanente e ativado.", ...status });
+});
+
 // ─── Auto-capturar cookies via Puppeteer (apenas sandbox) ────────────────────
 router.post("/tjsp/auto-login", async (_req: Request, res: Response) => {
   try {

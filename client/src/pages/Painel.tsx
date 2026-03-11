@@ -822,6 +822,34 @@ export default function Painel() {
     }
   }, [cookiesInput]);
 
+  const salvarCookiePermanente = useCallback(async () => {
+    if (!cookiesInput.trim()) {
+      toast.error("Cole os cookies do TJSP");
+      return;
+    }
+    setConfigurandoCookies(true);
+    try {
+      const resp = await fetch("/api/tjsp/cookies/permanente", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookies: cookiesInput.trim() }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setStatusTJSP({ autenticado: true, expiracao: data.expiracao, tempoRestante: data.tempoRestante });
+        setModalCookies(false);
+        setCookiesInput("");
+        toast.success("🔒 Cookie salvo como PERMANENTE! O sistema usará automaticamente quando a sessão expirar.");
+      } else {
+        toast.error(data.error || "Erro ao salvar cookie permanente");
+      }
+    } catch (err: unknown) {
+      toast.error("Erro: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setConfigurandoCookies(false);
+    }
+  }, [cookiesInput]);
+
   const copiarRelatorio = useCallback(() => {
     const txt = formatarRelatorioTxt(processosFiltrados);
     navigator.clipboard.writeText(txt).then(() => toast.success("Relatório copiado!"));
@@ -1840,20 +1868,33 @@ export default function Painel() {
                 rows={4}
                 className="w-full bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-3 text-xs focus:outline-none focus:border-indigo-500 placeholder-gray-600 font-mono resize-none"
               />
-              <div className="flex gap-3">
+              <div className="bg-[#0a1628] border border-green-900/40 rounded-xl p-3 text-xs text-green-400">
+                <p className="font-semibold mb-1">🔒 SALVAR COMO PERMANENTE (recomendado)</p>
+                <p className="text-gray-400">O sistema usará este cookie automaticamente sempre que a sessão expirar, sem precisar configurar novamente.</p>
+              </div>
+              <div className="flex flex-col gap-2">
                 <button
-                  onClick={configurarCookies}
+                  onClick={salvarCookiePermanente}
                   disabled={configurandoCookies}
-                  className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
+                  className="w-full bg-gradient-to-r from-green-700 to-emerald-700 hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
                 >
-                  {configurandoCookies ? "Configurando..." : "✅ SALVAR COOKIES"}
+                  {configurandoCookies ? "Salvando..." : "🔒 SALVAR COMO PERMANENTE"}
                 </button>
-                <button
-                  onClick={() => setModalCookies(false)}
-                  className="px-6 py-3 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-400 rounded-xl text-sm transition-all"
-                >
-                  Cancelar
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={configurarCookies}
+                    disabled={configurandoCookies}
+                    className="flex-1 bg-[#1a1a2e] hover:bg-[#2a2a4e] disabled:opacity-50 text-gray-300 font-semibold px-4 py-2.5 rounded-xl text-xs tracking-wider transition-all border border-[#2a2a4e]"
+                  >
+                    {configurandoCookies ? "..." : "⏱️ Usar por 8h (temporário)"}
+                  </button>
+                  <button
+                    onClick={() => setModalCookies(false)}
+                    className="px-4 py-2.5 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-500 rounded-xl text-xs transition-all"
+                  >
+                    Cancelar
+                  </button>
+                </div>
               </div>
             </div>
           </div>
