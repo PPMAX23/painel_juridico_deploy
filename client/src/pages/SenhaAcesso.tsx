@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
-const SENHA_CORRETA = "384378";
+const SENHA_CORRETA = "991219";
 const SESSION_KEY = "painel_juridico_senha_ok";
 
 interface SenhaAcessoProps {

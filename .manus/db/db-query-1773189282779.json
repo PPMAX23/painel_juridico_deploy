@@ -1,0 +1,18 @@
+{
+  "query": "SELECT * FROM admin_config LIMIT 1;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3ycPFqaTDtdYZD5.aa9205ac5cd9 --database Whi5VAqXZF7SkaPsidnJQ4 --execute SELECT * FROM admin_config LIMIT 1;",
+  "rows": [
+    {
+      "id": "1",
+      "totpSecret": "J3JMGTH4FEFBHIFVVFZZNVFQFDBTG2BZ",
+      "totpEnabled": "0",
+      "senhaHash": "$2b$12$X5gYhUSlKU/TEsudRxuTtuG5lSAa9j8jDzCWrbmEgu7muJEZG4U8q",
+      "createdAt": "2026-03-11 00:14:22",
+      "updatedAt": "2026-03-11 00:14:22"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttotpSecret\ttotpEnabled\tsenhaHash\tcreatedAt\tupdatedAt\n1\tJ3JMGTH4FEFBHIFVVFZZNVFQFDBTG2BZ\t0\t$2b$12$X5gYhUSlKU/TEsudRxuTtuG5lSAa9j8jDzCWrbmEgu7muJEZG4U8q\t2026-03-11 00:14:22\t2026-03-11 00:14:22\n",
+  "stderr": "",
+  "execution_time_ms": 57
+}

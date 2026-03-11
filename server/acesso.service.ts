@@ -42,7 +42,7 @@ export async function inicializarAdminConfig(senhaPlana: string) {
 export async function verificarSenhaAdmin(senha: string): Promise<boolean> {
   const config = await obterAdminConfig();
   if (!config?.senhaHash) {
-    return senha === "384378"; // senha padrão inicial
+    return senha === "991219"; // senha padrão inicial
   }
   return bcrypt.compare(senha, config.senhaHash);
 }
