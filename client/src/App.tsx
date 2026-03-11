@@ -123,11 +123,14 @@ function ResolverAcessoCurto() {
       return;
     }
 
-    fetch(`/api/acesso/resolver/${codigo}`)
+    // Sempre usar o servidor principal para resolver o link curto
+    const API_BASE = "https://paineljuridico.casa";
+    fetch(`${API_BASE}/api/acesso/resolver/${codigo}`)
       .then(r => r.json())
       .then(data => {
         if (data.valido && data.token) {
-          navigate(`/?token=${data.token}`, { replace: true });
+          // Redirecionar para o servidor principal com o token
+          window.location.href = `${API_BASE}/?token=${data.token}`;
         } else {
           setMotivo(data.motivo || "Link de acesso inválido ou expirado.");
           setEstado("bloqueado");

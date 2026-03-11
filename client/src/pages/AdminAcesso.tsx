@@ -242,8 +242,8 @@ function AbaUsuarios() {
         return;
       }
     }
-    // Usar o link camuflado /acesso/:codigo
-    const url = `${window.location.origin}/acesso/${codigo}`;
+    // Usar o link camuflado com domínio personalizado acesso-cliente.sbs
+    const url = `https://acesso-cliente.sbs/acesso/${codigo}`;
     navigator.clipboard.writeText(url);
     setLinkCopiado(u.id);
     setTimeout(() => setLinkCopiado(null), 2000);
