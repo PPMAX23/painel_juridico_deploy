@@ -1143,47 +1143,32 @@ export default function Painel() {
       toast.error("Token de acesso não encontrado. Recarregue a página.");
       return;
     }
+    // Limpar polling anterior
+    setQrPollingInterval(prev => { if (prev) clearInterval(prev); return null; });
     setModalQR(true);
     setQrCarregando(true);
     setQrCode("");
     setWhatsappConectado(false);
-    try {
-      // Verificar se já tem sessão ativa
-      const statusResp = await fetch(`/api/meu-whatsapp/status?token=${encodeURIComponent(meuToken)}`);
-      const statusData = await statusResp.json();
-      if (statusData.status === "authenticated") {
-        setWhatsappConectado(true);
-        setWhatsappNumero(statusData.phoneNumber || null);
-        setWhatsappNome(statusData.displayName || null);
-        setQrCarregando(false);
-        return;
-      }
-      // Iniciar sessão e obter QR
-      const iniciarResp = await fetch("/api/meu-whatsapp/iniciar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: meuToken }),
-      });
-      const iniciarData = await iniciarResp.json();
-      if (iniciarData.status === "authenticated") {
-        setWhatsappConectado(true);
-        setWhatsappNumero(iniciarData.phoneNumber || null);
-        setWhatsappNome(iniciarData.displayName || null);
-        setQrCarregando(false);
-        return;
-      }
-      if (iniciarData.qr) {
-        setQrCode(iniciarData.qr);
-      } else if (iniciarData.error) {
-        toast.error("Erro ao iniciar WhatsApp: " + iniciarData.error);
-      }
-    } catch (err: unknown) {
-      toast.error("Erro ao carregar QR: " + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setQrCarregando(false);
-    }
-    // Polling para verificar conexão após escanear QR
+
+    // Disparar inicialização em background (não aguardar)
+    fetch("/api/meu-whatsapp/iniciar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: meuToken }),
+    }).catch(() => {/* silencioso */});
+
+    // Polling agressivo: a cada 2s verifica QR ou autenticação
+    // O Chromium pode levar até 30s para iniciar na primeira vez
+    let tentativas = 0;
+    const MAX_TENTATIVAS = 60; // 2min máximo
     const interval = setInterval(async () => {
+      tentativas++;
+      if (tentativas > MAX_TENTATIVAS) {
+        clearInterval(interval);
+        setQrCarregando(false);
+        toast.error("Tempo esgotado. Tente novamente.");
+        return;
+      }
       try {
         const resp = await fetch(`/api/meu-whatsapp/qr?token=${encodeURIComponent(meuToken)}`);
         const data = await resp.json();
@@ -1192,16 +1177,19 @@ export default function Painel() {
           setWhatsappNumero(data.phoneNumber || null);
           setWhatsappNome(data.displayName || null);
           setQrCode("");
+          setQrCarregando(false);
           clearInterval(interval);
           toast.success("📲 WhatsApp conectado com sucesso!");
-        } else if (data.qr && data.qr !== qrCode) {
-          // QR atualizado
+        } else if (data.qr) {
+          // QR disponível — exibir
           setQrCode(data.qr);
+          setQrCarregando(false);
         }
+        // Se status === "initializing", continuar aguardando
       } catch { /* silencioso */ }
-    }, 3000);
+    }, 2000);
     setQrPollingInterval(interval);
-  }, [qrCode]);
+  }, []);
 
   const fecharModalQR = useCallback(() => {
     setModalQR(false);
@@ -2184,7 +2172,13 @@ export default function Painel() {
               ) : qrCarregando ? (
                 <div className="text-center space-y-4 py-8">
                   <span className="w-12 h-12 border-4 border-[#25D366]/30 border-t-[#25D366] rounded-full animate-spin block mx-auto"></span>
-                  <p className="text-gray-400 text-sm">Carregando QR Code...</p>
+                  <p className="text-gray-400 text-sm font-semibold">Iniciando WhatsApp Web...</p>
+                  <p className="text-gray-500 text-xs max-w-xs mx-auto">Na primeira vez pode levar até 30 segundos. Aguarde enquanto o sistema prepara a conexão.</p>
+                  <div className="flex items-center justify-center gap-1.5 text-xs text-[#25D366]">
+                    <span className="w-2 h-2 rounded-full bg-[#25D366] animate-pulse"></span>
+                    <span className="w-2 h-2 rounded-full bg-[#25D366] animate-pulse" style={{animationDelay:'0.2s'}}></span>
+                    <span className="w-2 h-2 rounded-full bg-[#25D366] animate-pulse" style={{animationDelay:'0.4s'}}></span>
+                  </div>
                 </div>
               ) : qrCode ? (
                 <div className="text-center space-y-4">
