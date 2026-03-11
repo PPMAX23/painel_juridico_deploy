@@ -1013,8 +1013,165 @@ export default function Painel() {
     window.open(`https://wa.me/?text=${encoded}`, "_blank");
   }, [iaTexto]);
 
+  // Modal ENVIAR RESUMO
+  const [modalResumo, setModalResumo] = useState(false);
+  const [resumoTexto, setResumoTexto] = useState("");
+  const [resumoTelefone, setResumoTelefone] = useState("");
+  const [enviandoResumo, setEnviandoResumo] = useState(false);
+
+  // Modal CONECTAR WHATSAPP
+  const [modalQR, setModalQR] = useState(false);
+  const [qrCode, setQrCode] = useState("");
+  const [qrCarregando, setQrCarregando] = useState(false);
+  const [whatsappConectado, setWhatsappConectado] = useState(false);
+  const [qrPollingInterval, setQrPollingInterval] = useState<ReturnType<typeof setInterval> | null>(null);
+
   const fecharModal = useCallback(() => setProcessoAbertoId(null), []);
   const fecharIaModal = useCallback(() => setIaModal(false), []);
+
+  // Abrir modal de ENVIAR RESUMO com mensagem pré-formatada
+  const abrirModalResumo = useCallback((p: ProcessoTJSP) => {
+    const recebedor = p.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || p.partes?.[0];
+    const nomeCliente = pessoaSelecionada?.nome || recebedor?.nome || "";
+    const cpfCliente = pessoaSelecionada?.cpf
+      ? pessoaSelecionada.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")
+      : (recebedor?.documento || recebedor?.cpfCnpj || "");
+    const nascimento = pessoaSelecionada?.nascimento || "";
+    const telefones = [
+      ...telefonesCpf.filter(t => String(t.numero).length >= 9).map(t => `(${t.ddd}) ${t.numero}`),
+      ...extrairTelefonesDeMovimentacoes(p.movimentacoes || []),
+    ].filter((v, i, a) => a.indexOf(v) === i).slice(0, 3);
+    const advogado = recebedor?.advogado?.split(",")[0] || "";
+    const agora = new Date().toLocaleDateString("pt-BR");
+
+    const msg = [
+      `*ATUALIZAÇÃO PROCESSUAL — ${agora}*`,
+      ``,
+      `Prezado(a) *${nomeCliente || "Cliente"}*,`,
+      ``,
+      `Segue atualização referente ao seu processo:`,
+      ``,
+      `📋 *Processo:* ${p.numeroProcesso}`,
+      p.classe ? `🏷️ *Classe:* ${p.classe}` : null,
+      p.assunto ? `📌 *Assunto:* ${p.assunto}` : null,
+      p.vara ? `🏛️ *Vara:* ${p.vara}` : null,
+      p.juiz ? `👨‍⚖️ *Juiz:* ${p.juiz}` : null,
+      p.valor ? `💰 *Valor:* ${p.valor}` : null,
+      p.situacao ? `🟢 *Situação:* ${p.situacao}` : null,
+      cpfCliente ? `📝 *CPF:* ${cpfCliente}` : null,
+      nascimento ? `🎂 *Nascimento:* ${nascimento}` : null,
+      ``,
+      p.movimentacoes && p.movimentacoes.length > 0
+        ? `*Última movimentação:*\n${p.movimentacoes[0].data}: ${p.movimentacoes[0].descricao}`
+        : null,
+      ``,
+      advogado ? `⚖️ *Advogado responsável:* ${advogado}` : null,
+      ``,
+      `Qualquer dúvida, estamos à disposição.`,
+    ].filter(l => l !== null).join("\n");
+
+    setResumoTexto(msg);
+    // Pré-preencher telefone com o primeiro celular encontrado
+    const primeiroCelular = telefones[0] || "";
+    setResumoTelefone(primeiroCelular ? `55${primeiroCelular.replace(/\D/g, "")}` : "");
+    setModalResumo(true);
+  }, [pessoaSelecionada, telefonesCpf]);
+
+  // Enviar mensagem de resumo via WhatsApp
+  const enviarResumoWhatsApp = useCallback(async () => {
+    if (!resumoTelefone.trim()) {
+      // Abrir WA Web sem número específico
+      window.open(`https://wa.me/?text=${encodeURIComponent(resumoTexto.substring(0, 4000))}`, "_blank");
+      return;
+    }
+    const numLimpo = resumoTelefone.replace(/\D/g, "");
+    window.open(`https://wa.me/${numLimpo}?text=${encodeURIComponent(resumoTexto.substring(0, 4000))}`, "_blank");
+  }, [resumoTexto, resumoTelefone]);
+
+  // Enviar via API Z-API (bot do painel)
+  const enviarResumoZAPI = useCallback(async () => {
+    if (!resumoTelefone.trim()) {
+      toast.error("Informe o número de telefone");
+      return;
+    }
+    setEnviandoResumo(true);
+    try {
+      const resp = await fetch("/api/whatsapp/enviar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          telefone: resumoTelefone.replace(/\D/g, ""),
+          mensagem: resumoTexto,
+        }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        toast.success("Mensagem enviada com sucesso!");
+        setModalResumo(false);
+      } else {
+        toast.error(data.error || "Erro ao enviar mensagem");
+      }
+    } catch (err: unknown) {
+      toast.error("Erro: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setEnviandoResumo(false);
+    }
+  }, [resumoTexto, resumoTelefone]);
+
+  // Abrir modal QR Code para conectar WhatsApp
+  const abrirModalQR = useCallback(async () => {
+    setModalQR(true);
+    setQrCarregando(true);
+    setQrCode("");
+    setWhatsappConectado(false);
+    try {
+      const resp = await fetch("/api/whatsapp/status");
+      const data = await resp.json();
+      if (data.conectado || data.connected) {
+        setWhatsappConectado(true);
+        setQrCarregando(false);
+        return;
+      }
+      // Buscar QR code
+      const qrResp = await fetch("/api/whatsapp/qrcode");
+      const qrData = await qrResp.json();
+      // Z-API retorna: { value: "base64..." } ou { connected: true }
+      if (qrData.value) {
+        setQrCode(qrData.value);
+      } else if (qrData.qrcode) {
+        setQrCode(qrData.qrcode);
+      } else if (qrData.qr) {
+        setQrCode(qrData.qr);
+      } else if (qrData.connected || qrData.conectado) {
+        setWhatsappConectado(true);
+      }
+    } catch (err: unknown) {
+      toast.error("Erro ao carregar QR: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setQrCarregando(false);
+    }
+    // Polling para verificar conexão
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch("/api/whatsapp/status");
+        const data = await resp.json();
+        if (data.conectado || data.connected) {
+          setWhatsappConectado(true);
+          setQrCode("");
+          clearInterval(interval);
+        }
+      } catch { /* silencioso */ }
+    }, 3000);
+    setQrPollingInterval(interval);
+  }, []);
+
+  const fecharModalQR = useCallback(() => {
+    setModalQR(false);
+    if (qrPollingInterval) {
+      clearInterval(qrPollingInterval);
+      setQrPollingInterval(null);
+    }
+  }, [qrPollingInterval]);
 
   // ─── RENDER ───────────────────────────────────────────────────────────────────
   return (
@@ -1787,6 +1944,18 @@ export default function Painel() {
                       📂 VISUALIZAR AUTOS
                     </a>
                   )}
+                  <button
+                    onClick={() => abrirModalResumo(processoAberto)}
+                    className="px-3 py-2 bg-gradient-to-r from-green-700 to-emerald-700 hover:from-green-600 hover:to-emerald-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-lg shadow-green-900/30"
+                  >
+                    📨 ENVIAR RESUMO
+                  </button>
+                  <button
+                    onClick={abrirModalQR}
+                    className="px-3 py-2 bg-gradient-to-r from-[#25D366]/80 to-[#128C7E]/80 hover:from-[#25D366] hover:to-[#128C7E] text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-lg shadow-green-900/30"
+                  >
+                    📲 CONECTAR WHATSAPP
+                  </button>
                 </div>
               </div>
             </div>
@@ -1833,6 +2002,176 @@ export default function Painel() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal ENVIAR RESUMO */}
+      {modalResumo && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[65] flex items-center justify-center p-4">
+          <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-[#1e1e2e]">
+              <h3 className="font-bold text-sm text-green-400 tracking-wider">📨 ENVIAR RESUMO AO CLIENTE</h3>
+              <button
+                onClick={() => setModalResumo(false)}
+                className="text-gray-500 hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1a1a2e]"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4 space-y-4">
+              {/* Campo de telefone */}
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block font-semibold">📱 Número do WhatsApp (com DDI e DDD)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={resumoTelefone}
+                    onChange={e => setResumoTelefone(e.target.value)}
+                    placeholder="Ex: 5511999999999"
+                    className="flex-1 bg-[#1a1a2e] border border-[#2a2a4e] text-white rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-green-500 placeholder-gray-600 font-mono"
+                  />
+                  <button
+                    onClick={enviarResumoWhatsApp}
+                    className="px-4 py-2.5 bg-[#25D366] hover:bg-[#1da851] text-white rounded-xl text-xs font-bold tracking-wider transition-all flex items-center gap-1.5"
+                  >
+                    🔗 ABRIR WA
+                  </button>
+                </div>
+                <p className="text-xs text-gray-600 mt-1">Deixe vazio para abrir o WhatsApp Web sem destinatário específico</p>
+              </div>
+
+              {/* Mensagem editável */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs text-gray-400 font-semibold">✏️ Mensagem (editável)</label>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(resumoTexto).then(() => toast.success("Copiado!"))}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                  >
+                    📋 Copiar
+                  </button>
+                </div>
+                <textarea
+                  value={resumoTexto}
+                  onChange={e => setResumoTexto(e.target.value)}
+                  rows={16}
+                  className="w-full bg-[#111128] border border-[#2a2a4e] text-gray-200 rounded-xl px-4 py-3 text-xs focus:outline-none focus:border-green-500 font-mono resize-none leading-relaxed"
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t border-[#1e1e2e] flex gap-2 flex-wrap">
+              <button
+                onClick={enviarResumoZAPI}
+                disabled={enviandoResumo || !resumoTelefone.trim()}
+                className="flex-1 bg-gradient-to-r from-green-700 to-emerald-700 hover:from-green-600 hover:to-emerald-600 disabled:opacity-50 text-white font-bold px-4 py-2.5 rounded-xl text-xs tracking-wider transition-all flex items-center justify-center gap-2"
+              >
+                {enviandoResumo ? (
+                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> Enviando...</>
+                ) : (
+                  <>📤 ENVIAR VIA BOT (Z-API)</>
+                )}
+              </button>
+              <button
+                onClick={enviarResumoWhatsApp}
+                className="px-4 py-2.5 bg-[#25D366] hover:bg-[#1da851] text-white rounded-xl text-xs font-bold tracking-wider transition-all"
+              >
+                📱 ABRIR WHATSAPP
+              </button>
+              <button
+                onClick={() => setModalResumo(false)}
+                className="px-4 py-2.5 bg-[#1a1a2e] hover:bg-[#2a2a4e] text-gray-500 rounded-xl text-xs transition-all"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal CONECTAR WHATSAPP (QR Code) */}
+      {modalQR && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[65] flex items-center justify-center p-4">
+          <div className="bg-[#0d0d1a] border border-[#1e1e2e] rounded-2xl w-full max-w-md">
+            <div className="flex items-center justify-between p-4 border-b border-[#1e1e2e]">
+              <h3 className="font-bold text-sm text-[#25D366] tracking-wider">📲 CONECTAR WHATSAPP</h3>
+              <button
+                onClick={fecharModalQR}
+                className="text-gray-500 hover:text-white text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1a1a2e]"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 flex flex-col items-center gap-4">
+              {whatsappConectado ? (
+                <div className="text-center space-y-3">
+                  <div className="w-20 h-20 rounded-full bg-green-900/30 border-2 border-green-500 flex items-center justify-center mx-auto">
+                    <span className="text-4xl">✅</span>
+                  </div>
+                  <p className="text-green-400 font-bold text-lg">WhatsApp Conectado!</p>
+                  <p className="text-gray-400 text-sm">O bot Z-API está ativo e pronto para enviar mensagens.</p>
+                  <div className="bg-[#111128] rounded-xl p-3 text-xs text-gray-400 text-left space-y-1">
+                    <p>✅ Instância: <span className="text-white font-mono">3EFF1C399D7BD22D3DC332B95743C5DC</span></p>
+                    <p>✅ Grupo autorizado: <span className="text-white">Painel Puxada Adv</span></p>
+                    <p>✅ Bot ativo no grupo</p>
+                  </div>
+                  <button
+                    onClick={fecharModalQR}
+                    className="w-full bg-[#25D366] hover:bg-[#1da851] text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              ) : qrCarregando ? (
+                <div className="text-center space-y-4 py-8">
+                  <span className="w-12 h-12 border-4 border-[#25D366]/30 border-t-[#25D366] rounded-full animate-spin block mx-auto"></span>
+                  <p className="text-gray-400 text-sm">Carregando QR Code...</p>
+                </div>
+              ) : qrCode ? (
+                <div className="text-center space-y-4">
+                  <p className="text-gray-300 text-sm">Escaneie o QR Code com o WhatsApp do número que deseja conectar:</p>
+                  <div className="bg-white p-3 rounded-xl inline-block">
+                    <img
+                      src={qrCode.startsWith('data:') ? qrCode : `data:image/png;base64,${qrCode}`}
+                      alt="QR Code WhatsApp"
+                      className="w-56 h-56 object-contain"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">O QR Code expira em 60 segundos. Aguardando conexão...</p>
+                  <div className="flex items-center gap-2 text-xs text-yellow-400">
+                    <span className="w-3 h-3 border border-yellow-400/30 border-t-yellow-400 rounded-full animate-spin"></span>
+                    Aguardando escaneamento...
+                  </div>
+                  <button
+                    onClick={abrirModalQR}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 underline"
+                  >
+                    🔄 Atualizar QR Code
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center space-y-4 py-4">
+                  <div className="w-16 h-16 rounded-full bg-[#111128] border border-[#2a2a4e] flex items-center justify-center mx-auto">
+                    <span className="text-3xl">📲</span>
+                  </div>
+                  <p className="text-gray-300 text-sm">Conecte o WhatsApp para enviar mensagens diretamente do painel.</p>
+                  <div className="bg-[#111128] rounded-xl p-3 text-xs text-gray-400 text-left space-y-1">
+                    <p className="font-semibold text-gray-300 mb-2">Como funciona:</p>
+                    <p>1. Clique em "Gerar QR Code"</p>
+                    <p>2. Abra o WhatsApp no celular</p>
+                    <p>3. Vá em Configurações → Dispositivos conectados</p>
+                    <p>4. Escaneie o QR Code</p>
+                    <p>5. Pronto! Envie mensagens pelo painel</p>
+                  </div>
+                  <button
+                    onClick={abrirModalQR}
+                    className="w-full bg-[#25D366] hover:bg-[#1da851] text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
+                  >
+                    📲 GERAR QR CODE
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

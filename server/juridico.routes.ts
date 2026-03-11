@@ -680,4 +680,46 @@ router.get("/admin/whatsapp/status", requireAdmin, async (_req: Request, res: Re
   return res.json(status);
 });
 
+// ─── QR Code do WhatsApp para conexão direta no painel ─────────────────────
+router.get("/whatsapp/qrcode", async (_req: Request, res: Response) => {
+  try {
+    const instanceId = process.env.ZAPI_INSTANCE_ID;
+    const token = process.env.ZAPI_TOKEN;
+    const clientToken = process.env.ZAPI_CLIENT_TOKEN;
+    if (!instanceId || !token) return res.status(503).json({ error: "Z-API não configurada" });
+    const resp = await fetch(
+      `https://api.z-api.io/instances/${instanceId}/token/${token}/qr-code/image`,
+      { headers: { "Client-Token": clientToken || "" } }
+    );
+    if (!resp.ok) return res.status(502).json({ error: "Erro ao obter QR Code da Z-API" });
+    const data = await resp.json();
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
+// Status da conexão WhatsApp (público para o painel)
+router.get("/whatsapp/status", async (_req: Request, res: Response) => {
+  try {
+    const status = await verificarConexao();
+    return res.json(status);
+  } catch (e) {
+    return res.status(500).json({ conectado: false, smartphoneConectado: false });
+  }
+});
+
+// Enviar mensagem diretamente para um número de cliente
+router.post("/whatsapp/enviar", async (req: Request, res: Response) => {
+  try {
+    const { telefone, mensagem } = req.body as { telefone: string; mensagem: string };
+    if (!telefone || !mensagem) return res.status(400).json({ error: "telefone e mensagem são obrigatórios" });
+    const { enviarTexto } = await import("./zapi.service");
+    const ok = await enviarTexto(telefone, mensagem);
+    return res.json({ ok });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
 export default router;

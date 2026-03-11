@@ -57,7 +57,7 @@ function foiCancelada(): boolean {
   return consultaCancelada;
 }
 
-// ─── Estado das conversas ────────────────────────────────────────────────────
+// Estado das conversas
 interface EstadoConversa {
   etapa: "menu" | "aguardando_busca";
   tipoBusca?: "oab" | "cpf" | "processo" | "nome";
