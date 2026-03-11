@@ -93,6 +93,38 @@ export async function enviarDocumentoGrupo(
   }
 }
 
+// Envia documento (PDF) para um grupo via URL pública (mais confiável que base64)
+export async function enviarDocumentoGrupoUrl(
+  grupoId: string,
+  urlPdf: string,
+  nomeArquivo: string,
+  caption?: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${getZapiBase()}/send-document/base64`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        phone: grupoId,
+        document: urlPdf,
+        fileName: nomeArquivo,
+        caption: caption || "",
+        extension: "pdf",
+      }),
+    });
+    const data = await res.json() as { zaapId?: string; messageId?: string; error?: string };
+    if (data.error) {
+      console.error("[ZAPI] Erro ao enviar documento via URL:", data.error);
+      return false;
+    }
+    console.log("[ZAPI] Documento enviado via URL com sucesso:", nomeArquivo);
+    return true;
+  } catch (err) {
+    console.error("[ZAPI] Falha ao enviar documento via URL:", err);
+    return false;
+  }
+}
+
 // Verifica se o número tem WhatsApp
 export async function verificarWhatsApp(telefone: string): Promise<boolean> {
   try {

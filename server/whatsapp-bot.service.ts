@@ -12,7 +12,13 @@
  *   ajuda / menu
  */
 
-import { enviarTextoGrupo, enviarDocumentoGrupo } from "./zapi.service";
+import { enviarTextoGrupo, enviarDocumentoGrupoUrl } from "./zapi.service";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { writeFile, unlink } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+const execFileAsync = promisify(execFile);
 import {
   buscarPorOAB,
   buscarPorCPFCNPJ,
@@ -328,15 +334,30 @@ async function gerarEEnviarAlvara(dadosAlvara: {
     }
 
     const pdfBuffer = Buffer.from(await resp.arrayBuffer());
-    const base64 = pdfBuffer.toString("base64");
     const nomeArquivo = `alvara_${dadosAlvara.numeroProcesso.replace(/[^0-9]/g, "")}.pdf`;
     const caption = `📄 *Alvará — ${dadosAlvara.numeroProcesso}*`;
 
-    const ok = await enviarDocumentoGrupo(GRUPO_AUTORIZADO, base64, nomeArquivo, caption);
-    if (!ok) {
-      console.error("[BOT] Falha ao enviar PDF do alvará:", dadosAlvara.numeroProcesso);
-    } else {
-      console.log("[BOT] Alvará enviado com sucesso:", dadosAlvara.numeroProcesso);
+    // Salvar PDF em arquivo temp, fazer upload para CDN e enviar URL
+    const tmpPath = join(tmpdir(), nomeArquivo);
+    try {
+      await writeFile(tmpPath, pdfBuffer);
+      const { stdout } = await execFileAsync("manus-upload-file", [tmpPath], { timeout: 60000 });
+      const urlMatch = stdout.match(/CDN URL:\s*(https:\/\/\S+)/);
+      if (!urlMatch) {
+        console.error("[BOT] Não foi possível obter URL do CDN:", stdout);
+        return;
+      }
+      const urlPdf = urlMatch[1].trim();
+      console.log("[BOT] PDF hospedado em:", urlPdf);
+
+      const ok = await enviarDocumentoGrupoUrl(GRUPO_AUTORIZADO, urlPdf, nomeArquivo, caption);
+      if (!ok) {
+        console.error("[BOT] Falha ao enviar PDF do alvará:", dadosAlvara.numeroProcesso);
+      } else {
+        console.log("[BOT] Alvará enviado com sucesso:", dadosAlvara.numeroProcesso);
+      }
+    } finally {
+      unlink(tmpPath).catch(() => {});
     }
   } catch (err) {
     console.error("[BOT] Erro ao gerar/enviar alvará:", err);
