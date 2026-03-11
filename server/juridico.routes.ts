@@ -722,4 +722,97 @@ router.post("/whatsapp/enviar", async (req: Request, res: Response) => {
   }
 });
 
+// ─── WhatsApp Web por Funcionário (whatsapp-web.js) ─────────────────────────
+// Iniciar sessão e retornar QR code para o funcionário escanear
+router.post("/meu-whatsapp/iniciar", async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body as { token: string };
+    if (!token) return res.status(400).json({ error: "token obrigatório" });
+
+    const { getOrCreateSession, getSessionStatus } = await import("./whatsapp-session.service");
+    const state = await getOrCreateSession(token);
+
+    // Aguardar até 3s para o QR aparecer ou autenticar
+    let tentativas = 0;
+    while (!state.qrDataUrl && state.status === "initializing" && tentativas < 15) {
+      await new Promise(r => setTimeout(r, 200));
+      tentativas++;
+    }
+
+    const status = getSessionStatus(token);
+    return res.json({
+      status: status.status,
+      qr: state.qrDataUrl || null,
+      phoneNumber: status.phoneNumber,
+      displayName: status.displayName,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
+// Verificar status da sessão do funcionário
+router.get("/meu-whatsapp/status", async (req: Request, res: Response) => {
+  try {
+    const token = req.query.token as string;
+    if (!token) return res.status(400).json({ error: "token obrigatório" });
+
+    const { getSessionStatus, hasSavedSession } = await import("./whatsapp-session.service");
+    const status = getSessionStatus(token);
+    return res.json({
+      ...status,
+      hasSavedSession: hasSavedSession(token),
+    });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
+// Polling de QR code (retorna QR atual ou status autenticado)
+router.get("/meu-whatsapp/qr", async (req: Request, res: Response) => {
+  try {
+    const token = req.query.token as string;
+    if (!token) return res.status(400).json({ error: "token obrigatório" });
+
+    const { getSessionQR, getSessionStatus } = await import("./whatsapp-session.service");
+    const qr = getSessionQR(token);
+    const status = getSessionStatus(token);
+
+    if (status.status === "authenticated") {
+      return res.json({ autenticado: true, phoneNumber: status.phoneNumber, displayName: status.displayName });
+    }
+    return res.json({ qr, status: status.status });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
+// Enviar mensagem via WhatsApp Web do próprio funcionário
+router.post("/meu-whatsapp/enviar", async (req: Request, res: Response) => {
+  try {
+    const { token, telefone, mensagem } = req.body as { token: string; telefone: string; mensagem: string };
+    if (!token || !telefone || !mensagem) {
+      return res.status(400).json({ error: "token, telefone e mensagem são obrigatórios" });
+    }
+    const { sendMessageFromSession } = await import("./whatsapp-session.service");
+    const result = await sendMessageFromSession(token, telefone, mensagem);
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// Desconectar sessão do funcionário
+router.post("/meu-whatsapp/desconectar", async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body as { token: string };
+    if (!token) return res.status(400).json({ error: "token obrigatório" });
+    const { disconnectSession } = await import("./whatsapp-session.service");
+    await disconnectSession(token);
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: String(e) });
+  }
+});
+
 export default router;

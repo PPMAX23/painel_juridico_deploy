@@ -1024,7 +1024,15 @@ export default function Painel() {
   const [qrCode, setQrCode] = useState("");
   const [qrCarregando, setQrCarregando] = useState(false);
   const [whatsappConectado, setWhatsappConectado] = useState(false);
+  const [whatsappNumero, setWhatsappNumero] = useState<string | null>(null);
+  const [whatsappNome, setWhatsappNome] = useState<string | null>(null);
   const [qrPollingInterval, setQrPollingInterval] = useState<ReturnType<typeof setInterval> | null>(null);
+
+  // Obter token do funcionário atual (salvo no sessionStorage pelo App.tsx)
+  const getMeuToken = () =>
+    new URLSearchParams(window.location.search).get("token") ||
+    sessionStorage.getItem("painel_acesso_token") ||
+    "";
 
   const fecharModal = useCallback(() => setProcessoAbertoId(null), []);
   const fecharIaModal = useCallback(() => setIaModal(false), []);
@@ -1088,25 +1096,35 @@ export default function Painel() {
     window.open(`https://wa.me/${numLimpo}?text=${encodeURIComponent(resumoTexto.substring(0, 4000))}`, "_blank");
   }, [resumoTexto, resumoTelefone]);
 
-  // Enviar via API Z-API (bot do painel)
+  // Enviar via WhatsApp Web do próprio funcionário
   const enviarResumoZAPI = useCallback(async () => {
     if (!resumoTelefone.trim()) {
       toast.error("Informe o número de telefone");
       return;
     }
+    const meuToken = getMeuToken();
+    if (!meuToken) {
+      toast.error("Token de acesso não encontrado. Recarregue a página.");
+      return;
+    }
+    if (!whatsappConectado) {
+      toast.error("Conecte seu WhatsApp primeiro clicando em \"CONECTAR WHATSAPP\"");
+      return;
+    }
     setEnviandoResumo(true);
     try {
-      const resp = await fetch("/api/whatsapp/enviar", {
+      const resp = await fetch("/api/meu-whatsapp/enviar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          token: meuToken,
           telefone: resumoTelefone.replace(/\D/g, ""),
           mensagem: resumoTexto,
         }),
       });
       const data = await resp.json();
       if (data.ok) {
-        toast.success("Mensagem enviada com sucesso!");
+        toast.success("✅ Mensagem enviada pelo seu WhatsApp!");
         setModalResumo(false);
       } else {
         toast.error(data.error || "Erro ao enviar mensagem");
@@ -1116,54 +1134,74 @@ export default function Painel() {
     } finally {
       setEnviandoResumo(false);
     }
-  }, [resumoTexto, resumoTelefone]);
+  }, [resumoTexto, resumoTelefone, whatsappConectado]);
 
-  // Abrir modal QR Code para conectar WhatsApp
+  // Abrir modal QR Code para conectar WhatsApp Web pessoal do funcionário
   const abrirModalQR = useCallback(async () => {
+    const meuToken = getMeuToken();
+    if (!meuToken) {
+      toast.error("Token de acesso não encontrado. Recarregue a página.");
+      return;
+    }
     setModalQR(true);
     setQrCarregando(true);
     setQrCode("");
     setWhatsappConectado(false);
     try {
-      const resp = await fetch("/api/whatsapp/status");
-      const data = await resp.json();
-      if (data.conectado || data.connected) {
+      // Verificar se já tem sessão ativa
+      const statusResp = await fetch(`/api/meu-whatsapp/status?token=${encodeURIComponent(meuToken)}`);
+      const statusData = await statusResp.json();
+      if (statusData.status === "authenticated") {
         setWhatsappConectado(true);
+        setWhatsappNumero(statusData.phoneNumber || null);
+        setWhatsappNome(statusData.displayName || null);
         setQrCarregando(false);
         return;
       }
-      // Buscar QR code
-      const qrResp = await fetch("/api/whatsapp/qrcode");
-      const qrData = await qrResp.json();
-      // Z-API retorna: { value: "base64..." } ou { connected: true }
-      if (qrData.value) {
-        setQrCode(qrData.value);
-      } else if (qrData.qrcode) {
-        setQrCode(qrData.qrcode);
-      } else if (qrData.qr) {
-        setQrCode(qrData.qr);
-      } else if (qrData.connected || qrData.conectado) {
+      // Iniciar sessão e obter QR
+      const iniciarResp = await fetch("/api/meu-whatsapp/iniciar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: meuToken }),
+      });
+      const iniciarData = await iniciarResp.json();
+      if (iniciarData.status === "authenticated") {
         setWhatsappConectado(true);
+        setWhatsappNumero(iniciarData.phoneNumber || null);
+        setWhatsappNome(iniciarData.displayName || null);
+        setQrCarregando(false);
+        return;
+      }
+      if (iniciarData.qr) {
+        setQrCode(iniciarData.qr);
+      } else if (iniciarData.error) {
+        toast.error("Erro ao iniciar WhatsApp: " + iniciarData.error);
       }
     } catch (err: unknown) {
       toast.error("Erro ao carregar QR: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setQrCarregando(false);
     }
-    // Polling para verificar conexão
+    // Polling para verificar conexão após escanear QR
     const interval = setInterval(async () => {
       try {
-        const resp = await fetch("/api/whatsapp/status");
+        const resp = await fetch(`/api/meu-whatsapp/qr?token=${encodeURIComponent(meuToken)}`);
         const data = await resp.json();
-        if (data.conectado || data.connected) {
+        if (data.autenticado) {
           setWhatsappConectado(true);
+          setWhatsappNumero(data.phoneNumber || null);
+          setWhatsappNome(data.displayName || null);
           setQrCode("");
           clearInterval(interval);
+          toast.success("📲 WhatsApp conectado com sucesso!");
+        } else if (data.qr && data.qr !== qrCode) {
+          // QR atualizado
+          setQrCode(data.qr);
         }
       } catch { /* silencioso */ }
     }, 3000);
     setQrPollingInterval(interval);
-  }, []);
+  }, [qrCode]);
 
   const fecharModalQR = useCallback(() => {
     setModalQR(false);
@@ -2069,7 +2107,7 @@ export default function Painel() {
                 {enviandoResumo ? (
                   <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span> Enviando...</>
                 ) : (
-                  <>📤 ENVIAR VIA BOT (Z-API)</>
+                  <>📤 ENVIAR PELO MEU WHATSAPP</>
                 )}
               </button>
               <button
@@ -2108,19 +2146,40 @@ export default function Painel() {
                   <div className="w-20 h-20 rounded-full bg-green-900/30 border-2 border-green-500 flex items-center justify-center mx-auto">
                     <span className="text-4xl">✅</span>
                   </div>
-                  <p className="text-green-400 font-bold text-lg">WhatsApp Conectado!</p>
-                  <p className="text-gray-400 text-sm">O bot Z-API está ativo e pronto para enviar mensagens.</p>
-                  <div className="bg-[#111128] rounded-xl p-3 text-xs text-gray-400 text-left space-y-1">
-                    <p>✅ Instância: <span className="text-white font-mono">3EFF1C399D7BD22D3DC332B95743C5DC</span></p>
-                    <p>✅ Grupo autorizado: <span className="text-white">Painel Puxada Adv</span></p>
-                    <p>✅ Bot ativo no grupo</p>
+                  <p className="text-green-400 font-bold text-lg">Seu WhatsApp está conectado!</p>
+                  <p className="text-gray-400 text-sm">Você pode enviar mensagens diretamente pelo painel.</p>
+                  <div className="bg-[#111128] rounded-xl p-3 text-xs text-gray-400 text-left space-y-1.5">
+                    {whatsappNome && <p>👤 <span className="text-white font-semibold">{whatsappNome}</span></p>}
+                    {whatsappNumero && <p>📱 <span className="text-white font-mono">+{whatsappNumero}</span></p>}
+                    <p>✅ <span className="text-green-400">Sessão ativa e pronta para envio</span></p>
                   </div>
-                  <button
-                    onClick={fecharModalQR}
-                    className="w-full bg-[#25D366] hover:bg-[#1da851] text-white font-bold px-6 py-3 rounded-xl text-sm tracking-wider transition-all"
-                  >
-                    Fechar
-                  </button>
+                  <div className="flex gap-2 w-full">
+                    <button
+                      onClick={fecharModalQR}
+                      className="flex-1 bg-[#25D366] hover:bg-[#1da851] text-white font-bold px-4 py-2.5 rounded-xl text-sm tracking-wider transition-all"
+                    >
+                      Fechar
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const meuToken = getMeuToken();
+                        if (!meuToken) return;
+                        await fetch("/api/meu-whatsapp/desconectar", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ token: meuToken }),
+                        });
+                        setWhatsappConectado(false);
+                        setWhatsappNumero(null);
+                        setWhatsappNome(null);
+                        toast.success("WhatsApp desconectado");
+                        fecharModalQR();
+                      }}
+                      className="px-4 py-2.5 bg-red-900/40 hover:bg-red-900/70 text-red-400 rounded-xl text-xs transition-all border border-red-900/50"
+                    >
+                      Desconectar
+                    </button>
+                  </div>
                 </div>
               ) : qrCarregando ? (
                 <div className="text-center space-y-4 py-8">
