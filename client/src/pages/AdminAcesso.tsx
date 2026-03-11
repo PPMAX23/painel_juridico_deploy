@@ -480,9 +480,13 @@ function ModalUsuario({ usuario, onClose }: { usuario?: Usuario; onClose: () => 
             <input
               type="number"
               value={limite}
-              onChange={e => setLimite(parseInt(e.target.value) || 50)}
+              onChange={e => {
+                const v = parseInt(e.target.value);
+                if (!isNaN(v) && v >= 1 && v <= 9999) setLimite(v);
+              }}
+              onFocus={e => e.target.select()}
               min={1}
-              max={500}
+              max={9999}
               className="w-full bg-[#0a0f1e] border border-blue-900/40 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
             />
           </div>

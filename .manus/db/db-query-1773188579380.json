@@ -1,0 +1,26 @@
+{
+  "query": "SELECT * FROM painel_usuarios LIMIT 1;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3ycPFqaTDtdYZD5.aa9205ac5cd9 --database Whi5VAqXZF7SkaPsidnJQ4 --execute SELECT * FROM painel_usuarios LIMIT 1;",
+  "rows": [
+    {
+      "id": "2",
+      "nome": "Maria Fernanda (Estagiária)",
+      "email": "mariafernanda@escritorio.com",
+      "token": "174649d8b1ee443bd224bcce25e284f3338e0aca6dcd90d1",
+      "ativo": "1",
+      "permBuscar": "1",
+      "permEnriquecimento": "1",
+      "permAlvara": "1",
+      "permOficio": "0",
+      "permIA": "1",
+      "limiteConsultasDia": "5020",
+      "expiresAt": "NULL",
+      "createdAt": "2026-03-11 00:21:48",
+      "updatedAt": "2026-03-11 00:21:48"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tnome\temail\ttoken\tativo\tpermBuscar\tpermEnriquecimento\tpermAlvara\tpermOficio\tpermIA\tlimiteConsultasDia\texpiresAt\tcreatedAt\tupdatedAt\n2\tMaria Fernanda (Estagiária)\tmariafernanda@escritorio.com\t174649d8b1ee443bd224bcce25e284f3338e0aca6dcd90d1\t1\t1\t1\t1\t0\t1\t5020\tNULL\t2026-03-11 00:21:48\t2026-03-11 00:21:48\n",
+  "stderr": "",
+  "execution_time_ms": 80
+}

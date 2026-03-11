@@ -1,0 +1,52 @@
+{
+  "query": "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'painel_usuarios';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3ycPFqaTDtdYZD5.aa9205ac5cd9 --database Whi5VAqXZF7SkaPsidnJQ4 --execute SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'painel_usuarios';",
+  "rows": [
+    {
+      "COLUMN_NAME": "id"
+    },
+    {
+      "COLUMN_NAME": "nome"
+    },
+    {
+      "COLUMN_NAME": "email"
+    },
+    {
+      "COLUMN_NAME": "token"
+    },
+    {
+      "COLUMN_NAME": "ativo"
+    },
+    {
+      "COLUMN_NAME": "permBuscar"
+    },
+    {
+      "COLUMN_NAME": "permEnriquecimento"
+    },
+    {
+      "COLUMN_NAME": "permAlvara"
+    },
+    {
+      "COLUMN_NAME": "permOficio"
+    },
+    {
+      "COLUMN_NAME": "permIA"
+    },
+    {
+      "COLUMN_NAME": "limiteConsultasDia"
+    },
+    {
+      "COLUMN_NAME": "expiresAt"
+    },
+    {
+      "COLUMN_NAME": "createdAt"
+    },
+    {
+      "COLUMN_NAME": "updatedAt"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\nid\nnome\nemail\ntoken\nativo\npermBuscar\npermEnriquecimento\npermAlvara\npermOficio\npermIA\nlimiteConsultasDia\nexpiresAt\ncreatedAt\nupdatedAt\n",
+  "stderr": "",
+  "execution_time_ms": 60
+}
