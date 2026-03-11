@@ -1,10 +1,11 @@
 /**
  * whatsapp-bot.service.ts
  * Chatbot jurídico via WhatsApp — integração Z-API + TJSP
- * Fluxo: usuário envia mensagem → bot interpreta → busca no TJSP → responde
+ * Funciona EXCLUSIVAMENTE no grupo autorizado "Painel Puxada Adv"
+ * Qualquer mensagem fora do grupo é ignorada silenciosamente.
  */
 
-import { enviarTexto } from "./zapi.service";
+import { enviarTexto, enviarTextoGrupo } from "./zapi.service";
 import {
   buscarPorOAB,
   buscarPorCPFCNPJ,
@@ -14,8 +15,11 @@ import {
   type ProcessoResumo,
 } from "./tjsp-http.service";
 
-// ─── Estado das conversas (em memória) ───────────────────────────────────────
-// Guarda o estado de cada conversa por número de telefone
+// ─── Grupo autorizado ─────────────────────────────────────────────────────────
+// ID do grupo "Painel Puxada Adv" obtido via Z-API
+const GRUPO_AUTORIZADO = process.env.ZAPI_GRUPO_ID || "120363410236215446-group";
+
+// ─── Estado das conversas por remetente dentro do grupo ──────────────────────
 interface EstadoConversa {
   etapa: "menu" | "aguardando_busca";
   tipoBusca?: "oab" | "cpf" | "processo" | "nome";
@@ -27,9 +31,9 @@ const conversas = new Map<string, EstadoConversa>();
 // Limpar conversas inativas após 30 minutos
 setInterval(() => {
   const agora = Date.now();
-  Array.from(conversas.entries()).forEach(([phone, estado]) => {
+  Array.from(conversas.entries()).forEach(([key, estado]) => {
     if (agora - estado.ultimaAtividade > 30 * 60 * 1000) {
-      conversas.delete(phone);
+      conversas.delete(key);
     }
   });
 }, 5 * 60 * 1000);
@@ -39,7 +43,7 @@ setInterval(() => {
 const MENU_PRINCIPAL = `⚖️ *PAINEL JURÍDICO TJSP*
 _Consulta Processual Automatizada_
 
-Olá! Como posso ajudar?
+Como posso ajudar?
 
 *1* — Buscar por OAB
 *2* — Buscar por CPF / CNPJ
@@ -51,9 +55,7 @@ Digite o número da opção desejada.`;
 const MSG_SEM_COOKIES = `⚠️ *Sistema Temporariamente Indisponível*
 
 A conexão com o TJSP está sendo renovada.
-Por favor, tente novamente em alguns minutos.
-
-Se o problema persistir, contate o administrador.`;
+Tente novamente em alguns minutos.`;
 
 function msgAguardandoBusca(tipo: string): string {
   const exemplos: Record<string, string> = {
@@ -71,15 +73,15 @@ function msgAguardandoBusca(tipo: string): string {
   return `🔍 *Busca por ${labels[tipo] || tipo}*\n\nDigite o ${labels[tipo] || tipo}:\n${exemplos[tipo] || ""}\n\n_Digite *menu* para voltar ao início._`;
 }
 
-function formatarProcessos(processos: ProcessoResumo[]): string {
+function formatarProcessos(processos: ProcessoResumo[], remetente: string): string {
   if (!processos || processos.length === 0) {
-    return "❌ *Nenhum processo encontrado* para esta consulta.";
+    return `@${remetente}\n\n❌ *Nenhum processo encontrado* para esta consulta.`;
   }
 
   const total = processos.length;
-  const exibir = processos.slice(0, 5); // máximo 5 por mensagem
+  const exibir = processos.slice(0, 5);
 
-  let msg = `📋 *${total} processo(s) encontrado(s)*${total > 5 ? ` _(exibindo 5 primeiros)_` : ""}\n\n`;
+  let msg = `@${remetente}\n\n📋 *${total} processo(s) encontrado(s)*${total > 5 ? ` _(exibindo 5 primeiros)_` : ""}\n\n`;
 
   exibir.forEach((p, i) => {
     msg += `*${i + 1}.* ${p.numeroProcesso || "Nº não disponível"}\n`;
@@ -96,38 +98,59 @@ function formatarProcessos(processos: ProcessoResumo[]): string {
   return msg;
 }
 
+// ─── Enviar mensagem no grupo ─────────────────────────────────────────────────
+async function responderGrupo(mensagem: string): Promise<void> {
+  await enviarTextoGrupo(GRUPO_AUTORIZADO, mensagem);
+}
+
 // ─── Processador principal de mensagens ──────────────────────────────────────
 
-export async function processarMensagem(phone: string, texto: string): Promise<void> {
-  const msg = texto.trim().toLowerCase();
+export async function processarMensagem(
+  phone: string,       // número do remetente
+  texto: string,       // texto da mensagem
+  grupoId?: string,    // ID do grupo (se for mensagem de grupo)
+  remetente?: string   // número do remetente dentro do grupo
+): Promise<void> {
 
-  // Comandos globais
-  if (msg === "menu" || msg === "inicio" || msg === "início" || msg === "oi" || msg === "olá" || msg === "ola" || msg === "start") {
-    conversas.set(phone, { etapa: "menu", ultimaAtividade: Date.now() });
-    await enviarTexto(phone, MENU_PRINCIPAL);
+  // ── BLOQUEIO: ignorar mensagens fora do grupo autorizado ──
+  if (!grupoId || grupoId !== GRUPO_AUTORIZADO) {
+    // Mensagem privada ou grupo não autorizado — ignorar silenciosamente
+    console.log(`[BOT] Mensagem ignorada — fora do grupo autorizado. grupoId: ${grupoId || "privado"}`);
     return;
   }
 
-  const estado = conversas.get(phone) || { etapa: "menu" as const, ultimaAtividade: Date.now() };
+  const msg = texto.trim().toLowerCase();
+  // Usar o número do remetente dentro do grupo como chave de estado
+  const chave = remetente || phone;
+  const nomeExibicao = remetente ? remetente.replace("@c.us", "").replace("55", "") : "usuário";
+
+  // Comandos globais
+  if (msg === "menu" || msg === "inicio" || msg === "início" || msg === "oi" || msg === "olá" || msg === "ola" || msg === "start" || msg === "/menu") {
+    conversas.set(chave, { etapa: "menu", ultimaAtividade: Date.now() });
+    await responderGrupo(MENU_PRINCIPAL);
+    return;
+  }
+
+  const estado = conversas.get(chave) || { etapa: "menu" as const, ultimaAtividade: Date.now() };
   estado.ultimaAtividade = Date.now();
 
   // ── Etapa: menu principal ──
   if (estado.etapa === "menu") {
     if (msg === "1") {
-      conversas.set(phone, { etapa: "aguardando_busca", tipoBusca: "oab", ultimaAtividade: Date.now() });
-      await enviarTexto(phone, msgAguardandoBusca("oab"));
+      conversas.set(chave, { etapa: "aguardando_busca", tipoBusca: "oab", ultimaAtividade: Date.now() });
+      await responderGrupo(msgAguardandoBusca("oab"));
     } else if (msg === "2") {
-      conversas.set(phone, { etapa: "aguardando_busca", tipoBusca: "cpf", ultimaAtividade: Date.now() });
-      await enviarTexto(phone, msgAguardandoBusca("cpf"));
+      conversas.set(chave, { etapa: "aguardando_busca", tipoBusca: "cpf", ultimaAtividade: Date.now() });
+      await responderGrupo(msgAguardandoBusca("cpf"));
     } else if (msg === "3") {
-      conversas.set(phone, { etapa: "aguardando_busca", tipoBusca: "processo", ultimaAtividade: Date.now() });
-      await enviarTexto(phone, msgAguardandoBusca("processo"));
+      conversas.set(chave, { etapa: "aguardando_busca", tipoBusca: "processo", ultimaAtividade: Date.now() });
+      await responderGrupo(msgAguardandoBusca("processo"));
     } else if (msg === "4") {
-      conversas.set(phone, { etapa: "aguardando_busca", tipoBusca: "nome", ultimaAtividade: Date.now() });
-      await enviarTexto(phone, msgAguardandoBusca("nome"));
+      conversas.set(chave, { etapa: "aguardando_busca", tipoBusca: "nome", ultimaAtividade: Date.now() });
+      await responderGrupo(msgAguardandoBusca("nome"));
     } else {
-      // Mensagem não reconhecida no menu — mostrar menu
-      await enviarTexto(phone, MENU_PRINCIPAL);
+      // Mensagem não reconhecida — mostrar menu
+      await responderGrupo(MENU_PRINCIPAL);
     }
     return;
   }
@@ -136,15 +159,13 @@ export async function processarMensagem(phone: string, texto: string): Promise<v
   if (estado.etapa === "aguardando_busca" && estado.tipoBusca) {
     const tipo = estado.tipoBusca;
 
-    // Verificar se os cookies TJSP estão ativos
     if (!cookiesValidos()) {
-      await enviarTexto(phone, MSG_SEM_COOKIES);
-      conversas.set(phone, { etapa: "menu", ultimaAtividade: Date.now() });
+      await responderGrupo(MSG_SEM_COOKIES);
+      conversas.set(chave, { etapa: "menu", ultimaAtividade: Date.now() });
       return;
     }
 
-    // Mensagem de "buscando..."
-    await enviarTexto(phone, `⏳ *Buscando no TJSP...*\n\nAguarde um momento.`);
+    await responderGrupo(`⏳ *Buscando no TJSP...*\n\nAguarde um momento.`);
 
     try {
       let resultado: { processos: ProcessoResumo[]; totalEncontrados: number } = { processos: [], totalEncontrados: 0 };
@@ -159,19 +180,18 @@ export async function processarMensagem(phone: string, texto: string): Promise<v
         resultado = await buscarPorNome(texto.trim()) as typeof resultado;
       }
 
-      const resposta = formatarProcessos(resultado.processos);
-      await enviarTexto(phone, resposta);
+      const resposta = formatarProcessos(resultado.processos, nomeExibicao);
+      await responderGrupo(resposta);
     } catch (err) {
       console.error("[BOT] Erro na busca:", err);
-      await enviarTexto(phone, `❌ *Erro ao consultar o TJSP*\n\nTente novamente ou contate o administrador.\n\nDigite *menu* para recomeçar.`);
+      await responderGrupo(`❌ *Erro ao consultar o TJSP*\n\nTente novamente ou contate o administrador.\n\nDigite *menu* para recomeçar.`);
     }
 
-    // Voltar ao menu após a busca
-    conversas.set(phone, { etapa: "menu", ultimaAtividade: Date.now() });
+    conversas.set(chave, { etapa: "menu", ultimaAtividade: Date.now() });
     return;
   }
 
-  // Fallback: mostrar menu
-  conversas.set(phone, { etapa: "menu", ultimaAtividade: Date.now() });
-  await enviarTexto(phone, MENU_PRINCIPAL);
+  // Fallback
+  conversas.set(chave, { etapa: "menu", ultimaAtividade: Date.now() });
+  await responderGrupo(MENU_PRINCIPAL);
 }

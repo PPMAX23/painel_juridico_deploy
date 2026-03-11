@@ -40,6 +40,26 @@ export async function enviarTexto(telefone: string, mensagem: string): Promise<b
   }
 }
 
+// Envia mensagem de texto para um grupo
+export async function enviarTextoGrupo(grupoId: string, mensagem: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${ZAPI_BASE}/send-text`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ phone: grupoId, message: mensagem }),
+    });
+    const data = await res.json() as { zaapId?: string; messageId?: string; error?: string };
+    if (data.error) {
+      console.error("[ZAPI] Erro ao enviar mensagem no grupo:", data.error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("[ZAPI] Falha na requisição de grupo:", err);
+    return false;
+  }
+}
+
 // Verifica se o número tem WhatsApp
 export async function verificarWhatsApp(telefone: string): Promise<boolean> {
   try {

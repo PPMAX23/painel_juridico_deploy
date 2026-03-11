@@ -619,29 +619,41 @@ router.post("/webhook/whatsapp", async (req: Request, res: Response) => {
   try {
     const body = req.body;
 
-    // Z-API envia diferentes tipos de eventos — processar apenas mensagens recebidas
-    // Ignorar mensagens enviadas pelo próprio bot (isFromMe: true)
+    // Ignorar mensagens enviadas pelo próprio bot
     if (!body || body.isFromMe === true) {
       return res.status(200).json({ ok: true });
     }
 
     // Extrair dados da mensagem
-    const phone = body.phone || body.from || "";
-    const texto = body.text?.message || body.message?.text || body.body || "";
+    // Para mensagens de grupo, a Z-API envia:
+    //   body.phone = ID do grupo (ex: 120363410236215446-group)
+    //   body.participantPhone = número do remetente dentro do grupo
+    //   body.isGroup = true
+    // Para mensagens privadas:
+    //   body.phone = número do remetente
+    //   body.isGroup = false ou undefined
+
+    const isGroup = body.isGroup === true || (typeof body.phone === "string" && body.phone.includes("-group"));
+    const grupoId = isGroup ? (body.phone || "") : undefined;
+    const remetente = isGroup ? (body.participantPhone || body.participant || body.phone || "") : (body.phone || "");
+    const phone = body.phone || "";
+    const texto = body.text?.message || body.message?.text || body.body || body.text || "";
 
     if (!phone || !texto) {
       return res.status(200).json({ ok: true });
     }
 
-    // Processar a mensagem de forma assíncrona (não bloquear o webhook)
-    processarMensagem(phone, texto).catch(err => {
+    console.log(`[WEBHOOK] Mensagem recebida | grupo: ${grupoId || "privado"} | remetente: ${remetente} | texto: ${texto.substring(0, 50)}`);
+
+    // Processar de forma assíncrona
+    processarMensagem(phone, texto, grupoId, remetente).catch(err => {
       console.error("[WEBHOOK] Erro ao processar mensagem:", err);
     });
 
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("[WEBHOOK] Erro:", err);
-    return res.status(200).json({ ok: true }); // sempre retornar 200 para a Z-API
+    return res.status(200).json({ ok: true });
   }
 });
 
