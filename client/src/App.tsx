@@ -111,8 +111,7 @@ function PaginaNeutra() {
 // ─── Componente que resolve o link curto ──────────────────────────────────────
 function ResolverAcessoCurto() {
   const params = useParams<{ codigo: string }>();
-  const [, navigate] = useLocation();
-  const [estado, setEstado] = useState<"loading" | "bloqueado">("loading");
+  const [estado, setEstado] = useState<"loading" | "bloqueado" | "liberado">("loading");
   const [motivo, setMotivo] = useState("");
 
   useEffect(() => {
@@ -123,14 +122,20 @@ function ResolverAcessoCurto() {
       return;
     }
 
-    // Sempre usar o servidor principal para resolver o link curto
-    const API_BASE = "https://paineljuridico.casa";
+    // Usar a API do servidor principal para resolver o link curto
+    // O servidor principal está no mesmo projeto — usa URL relativa se possível
+    const API_BASE = window.location.hostname === "paineljuridico.casa" || window.location.hostname === "www.paineljuridico.casa"
+      ? ""
+      : "https://paineljuridico.casa";
+
     fetch(`${API_BASE}/api/acesso/resolver/${codigo}`)
       .then(r => r.json())
       .then(data => {
         if (data.valido && data.token) {
-          // Redirecionar para o servidor principal com o token
-          window.location.href = `${API_BASE}/?token=${data.token}`;
+          // Salvar token no sessionStorage — NÃO redirecionar para outro domínio
+          sessionStorage.setItem("painel_acesso_token", data.token);
+          // Renderizar o painel diretamente no mesmo domínio
+          setEstado("liberado");
         } else {
           setMotivo(data.motivo || "Link de acesso inválido ou expirado.");
           setEstado("bloqueado");
@@ -144,6 +149,7 @@ function ResolverAcessoCurto() {
   }, []);
 
   if (estado === "bloqueado") return <AcessoNegado motivo={motivo} />;
+  if (estado === "liberado") return <PainelComValidacao />;
   return <CarregandoAcesso />;
 }
 
@@ -161,7 +167,12 @@ function PainelComValidacao() {
   useEffect(() => {
     if (!token) return;
 
-    fetch("/api/acesso/validar", {
+    // Usar URL absoluta do servidor principal quando no domínio externo
+    const API_BASE = (window.location.hostname === "paineljuridico.casa" || window.location.hostname === "www.paineljuridico.casa")
+      ? ""
+      : "https://paineljuridico.casa";
+
+    fetch(`${API_BASE}/api/acesso/validar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
