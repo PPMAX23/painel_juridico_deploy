@@ -502,7 +502,7 @@ router.post("/admin/usuarios", requireAdmin, async (req: Request, res: Response)
     permAlvara: permAlvara ?? false,
     permOficio: permOficio ?? false,
     permIA: permIA ?? true,
-    limiteConsultasDia: limiteConsultasDia ?? 50,
+    limiteConsultasDia: limiteConsultasDia ?? 200,
     expiresAt: expiresAt ? new Date(expiresAt) : null,
   });
   return res.json(usuario);

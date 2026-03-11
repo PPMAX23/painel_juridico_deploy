@@ -1,0 +1,1 @@
+ALTER TABLE `painel_usuarios` MODIFY COLUMN `limiteConsultasDia` int NOT NULL DEFAULT 200;

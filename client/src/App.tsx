@@ -26,6 +26,17 @@ let _usuarioAcesso: UsuarioAcesso | null = null;
 export function getUsuarioAcesso(): UsuarioAcesso | null { return _usuarioAcesso; }
 export function setUsuarioAcesso(u: UsuarioAcesso | null) { _usuarioAcesso = u; }
 
+// Verificar se há token na URL (acesso direto de funcionário)
+function temTokenNaURL(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return !!params.get("token");
+}
+
+// Verificar se há token salvo na sessão (funcionário já autenticado anteriormente)
+function temTokenNaSessao(): boolean {
+  return !!sessionStorage.getItem("painel_acesso_token");
+}
+
 function Router() {
   return (
     <Switch>
@@ -40,16 +51,18 @@ function Router() {
 
 function App() {
   const [location] = useLocation();
-  // A rota /admin tem seu próprio sistema de autenticação — não usa a senha de acesso normal
   const isAdminRoute = location === "/admin";
 
-  // Verificar se já está autenticado com a senha de acesso
-  const [autenticado, setAutenticado] = useState<boolean>(verificarSenhaAcesso);
+  // Autenticado se: já tem senha na sessão OU tem token na URL/sessão (funcionário)
+  const [autenticado, setAutenticado] = useState<boolean>(() => {
+    return verificarSenhaAcesso() || temTokenNaURL() || temTokenNaSessao();
+  });
 
   // Processar token de URL ao carregar
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get("token");
+
     if (token && !isAdminRoute) {
       // Validar token no backend e registrar log de acesso
       fetch("/api/acesso/validar", {
@@ -61,19 +74,26 @@ function App() {
         .then(data => {
           if (data.valido && data.usuario) {
             setUsuarioAcesso(data.usuario);
-            // Salvar token na sessão para persistência
+            // Salvar token na sessão para persistência (não pede senha novamente)
             sessionStorage.setItem("painel_acesso_token", token);
             sessionStorage.setItem("painel_acesso_usuario", JSON.stringify(data.usuario));
+            setAutenticado(true);
+          } else {
+            // Token inválido ou revogado — limpar sessão e pedir senha
+            sessionStorage.removeItem("painel_acesso_token");
+            sessionStorage.removeItem("painel_acesso_usuario");
+            setAutenticado(verificarSenhaAcesso());
           }
         })
         .catch(() => {});
-    } else {
-      // Tentar restaurar da sessão
+    } else if (!isAdminRoute) {
+      // Tentar restaurar da sessão (funcionário que já acessou antes)
       const savedToken = sessionStorage.getItem("painel_acesso_token");
       const savedUsuario = sessionStorage.getItem("painel_acesso_usuario");
       if (savedToken && savedUsuario) {
         try {
           setUsuarioAcesso(JSON.parse(savedUsuario));
+          setAutenticado(true);
         } catch { /* ignore */ }
       }
     }

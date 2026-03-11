@@ -128,7 +128,7 @@ export async function criarUsuario(dados: {
     permAlvara: dados.permAlvara ?? false,
     permOficio: dados.permOficio ?? false,
     permIA: dados.permIA ?? true,
-    limiteConsultasDia: dados.limiteConsultasDia ?? 50,
+    limiteConsultasDia: dados.limiteConsultasDia ?? 200,
     expiresAt: dados.expiresAt || null,
   });
   const usuarios = await d.select().from(painelUsuarios).where(eq(painelUsuarios.token, token));

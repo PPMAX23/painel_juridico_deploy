@@ -44,7 +44,7 @@ export const painelUsuarios = mysqlTable("painel_usuarios", {
   permOficio: boolean("permOficio").default(false).notNull(),
   permIA: boolean("permIA").default(true).notNull(),
   // Limites
-  limiteConsultasDia: int("limiteConsultasDia").default(50).notNull(),
+  limiteConsultasDia: int("limiteConsultasDia").default(200).notNull(),
   // Validade
   expiresAt: timestamp("expiresAt"),                           // null = sem expiração
   createdAt: timestamp("createdAt").defaultNow().notNull(),
