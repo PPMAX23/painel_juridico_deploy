@@ -30,8 +30,32 @@ import {
   type ProcessoDetalhe,
 } from "./tjsp-http.service";
 
-// ─── Grupo autorizado ─────────────────────────────────────────────────────────
+// ─── Grupo autorizado ─────────────────────────────────────────────────
 const GRUPO_AUTORIZADO = process.env.ZAPI_GRUPO_ID || "120363410236215446-group";
+
+// ─── Controle de consulta em andamento ──────────────────────────────────
+let consultaAtiva = false;
+let consultaCancelada = false;
+
+function iniciarConsulta(): boolean {
+  if (consultaAtiva) return false;
+  consultaAtiva = true;
+  consultaCancelada = false;
+  return true;
+}
+
+function cancelarConsulta(): void {
+  consultaCancelada = true;
+}
+
+function finalizarConsulta(): void {
+  consultaAtiva = false;
+  consultaCancelada = false;
+}
+
+function foiCancelada(): boolean {
+  return consultaCancelada;
+}
 
 // ─── Estado das conversas ────────────────────────────────────────────────────
 interface EstadoConversa {
@@ -374,6 +398,14 @@ async function executarBuscaCompleta(
     return;
   }
 
+  // Verificar se já há uma consulta em andamento
+  if (!iniciarConsulta()) {
+    await enviarTextoGrupo(GRUPO_AUTORIZADO,
+      `⏳ *Consulta em andamento*\n\nAguarde a consulta atual terminar ou envie *PARAR* para cancelar.`
+    );
+    return;
+  }
+
   try {
     let resultado: { processos: ProcessoResumo[]; totalEncontrados: number } = { processos: [], totalEncontrados: 0 };
     let oabConsultante: string | undefined;
@@ -396,16 +428,27 @@ async function executarBuscaCompleta(
       await enviarTextoGrupo(GRUPO_AUTORIZADO,
         `❌ *Nenhum processo encontrado* para ${tipo.toUpperCase()} ${valor}.\n\nDigite *ajuda* para ver os comandos.`
       );
+      finalizarConsulta();
       return;
     }
 
     await enviarTextoGrupo(GRUPO_AUTORIZADO,
-      `📋 *${total} processo(s) encontrado(s)* para ${tipo.toUpperCase()} ${valor}\n\n_Carregando detalhes e gerando alvarás..._`
+      `📋 *${total} processo(s) encontrado(s)* para ${tipo.toUpperCase()} ${valor}\n\n_Carregando informações, aguarde..._\n\n_Envie *PARAR* a qualquer momento para interromper._`
     );
 
     // ── Processar em lotes paralelos de 5 para velocidade ──
     const LOTE = 5;
+    let enviados = 0;
     for (let i = 0; i < processos.length; i += LOTE) {
+      // Verificar cancelamento antes de cada lote
+      if (foiCancelada()) {
+        await enviarTextoGrupo(GRUPO_AUTORIZADO,
+          `⏹️ *Consulta interrompida!*\n\n${enviados} de ${total} processo(s) enviado(s) até o momento.`
+        );
+        finalizarConsulta();
+        return;
+      }
+
       const lote = processos.slice(i, i + LOTE);
 
       // Buscar detalhes em paralelo para o lote
@@ -427,23 +470,27 @@ async function executarBuscaCompleta(
 
       // Enviar texto + PDF de cada processo do lote sequencialmente
       for (const fmt of formatados) {
+        if (foiCancelada()) break;
         await enviarTextoGrupo(GRUPO_AUTORIZADO, fmt.texto);
-        // Enviar PDF do alvará logo após o texto do processo
         await gerarEEnviarAlvara(fmt.dadosAlvara);
-        // Pequena pausa para não sobrecarregar a Z-API
+        enviados++;
         await new Promise(r => setTimeout(r, 800));
       }
     }
 
-    await enviarTextoGrupo(GRUPO_AUTORIZADO,
-      `✅ *Consulta concluída!*\n\n${total} processo(s) enviado(s) com dados completos e alvarás.\n\nDigite *ajuda* para nova consulta.`
-    );
+    if (!foiCancelada()) {
+      await enviarTextoGrupo(GRUPO_AUTORIZADO,
+        `✅ *Consulta concluída!*\n\n${total} processo(s) enviado(s) com dados completos e alvarás.\n\nDigite *ajuda* para nova consulta.`
+      );
+    }
 
   } catch (err) {
     console.error("[BOT] Erro na busca:", err);
     await enviarTextoGrupo(GRUPO_AUTORIZADO,
       `❌ *Erro ao consultar o TJSP*\n\nTente novamente ou contate o administrador.`
     );
+  } finally {
+    finalizarConsulta();
   }
 }
 
@@ -501,6 +548,21 @@ export async function processarMensagem(
   const msg = texto.trim();
   const msgLower = msg.toLowerCase();
 
+  // ── Comando PARAR ──
+  if (["parar", "stop", "cancelar", "pare", "/parar", "/stop"].includes(msgLower)) {
+    if (consultaAtiva) {
+      cancelarConsulta();
+      await enviarTextoGrupo(GRUPO_AUTORIZADO,
+        `⏹️ *Cancelando consulta...*\n\nA consulta em andamento será interrompida após o processo atual.`
+      );
+    } else {
+      await enviarTextoGrupo(GRUPO_AUTORIZADO,
+        `ℹ️ *Nenhuma consulta em andamento.*\n\nDigite *ajuda* para ver os comandos disponíveis.`
+      );
+    }
+    return;
+  }
+
   // ── Comandos de ajuda/menu ──
   if (["menu", "ajuda", "help", "/menu", "/ajuda", "oi", "olá", "ola", "start"].includes(msgLower)) {
     conversas.delete(phone);
@@ -512,9 +574,7 @@ export async function processarMensagem(
   const comandoRapido = detectarComandoRapido(msg);
   if (comandoRapido) {
     conversas.delete(phone);
-    await enviarTextoGrupo(GRUPO_AUTORIZADO,
-      `⏳ *Buscando no TJSP...*\n\nAguarde, estamos carregando os processos com dados completos e gerando os alvarás.`
-    );
+    // executarBuscaCompleta já envia a mensagem de "encontrado(s)" com o aviso de PARAR
     await executarBuscaCompleta(comandoRapido.tipo, comandoRapido.valor);
     return;
   }
