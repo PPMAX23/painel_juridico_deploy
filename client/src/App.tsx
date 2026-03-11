@@ -26,15 +26,15 @@ let _usuarioAcesso: UsuarioAcesso | null = null;
 export function getUsuarioAcesso(): UsuarioAcesso | null { return _usuarioAcesso; }
 export function setUsuarioAcesso(u: UsuarioAcesso | null) { _usuarioAcesso = u; }
 
-// Verificar se há token na URL (acesso direto de funcionário)
-function temTokenNaURL(): boolean {
+// Pegar token da URL (se existir)
+function getTokenDaURL(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return !!params.get("token");
+  return params.get("token");
 }
 
-// Verificar se há token salvo na sessão (funcionário já autenticado anteriormente)
-function temTokenNaSessao(): boolean {
-  return !!sessionStorage.getItem("painel_acesso_token");
+// Pegar token salvo na sessão
+function getTokenDaSessao(): string | null {
+  return sessionStorage.getItem("painel_acesso_token");
 }
 
 function Router() {
@@ -49,65 +49,95 @@ function Router() {
   );
 }
 
+// Tela de carregamento enquanto valida o token
+function CarregandoAcesso() {
+  return (
+    <div className="min-h-screen bg-[#07071a] flex items-center justify-center">
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-900/30 border border-indigo-700/30 rounded-2xl mb-4">
+          <span className="text-3xl">⚖️</span>
+        </div>
+        <div className="flex items-center gap-2 text-indigo-400 text-sm">
+          <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span>Verificando acesso...</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [location] = useLocation();
   const isAdminRoute = location === "/admin";
 
-  // Autenticado se: já tem senha na sessão OU tem token na URL/sessão (funcionário)
-  const [autenticado, setAutenticado] = useState<boolean>(() => {
-    return verificarSenhaAcesso() || temTokenNaURL() || temTokenNaSessao();
+  const tokenURL = getTokenDaURL();
+  const tokenSessao = getTokenDaSessao();
+  const temToken = !!(tokenURL || tokenSessao);
+
+  // Estado de autenticação:
+  // - "loading": tem token na URL, aguardando validação no backend
+  // - true: autenticado (senha ok ou token válido)
+  // - false: não autenticado, mostrar tela de senha
+  const [autenticado, setAutenticado] = useState<boolean | "loading">(() => {
+    if (isAdminRoute) return false; // admin tem seu próprio fluxo
+    if (verificarSenhaAcesso()) return true; // já autenticado com senha
+    if (temToken) return "loading"; // tem token, vai validar
+    return false; // sem token, pedir senha
   });
 
-  // Processar token de URL ao carregar
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get("token");
+    if (isAdminRoute) return;
 
-    if (token && !isAdminRoute) {
-      // Validar token no backend e registrar log de acesso
-      fetch("/api/acesso/validar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      })
-        .then(r => r.json())
-        .then(data => {
-          if (data.valido && data.usuario) {
-            setUsuarioAcesso(data.usuario);
-            // Salvar token na sessão para persistência (não pede senha novamente)
-            sessionStorage.setItem("painel_acesso_token", token);
-            sessionStorage.setItem("painel_acesso_usuario", JSON.stringify(data.usuario));
-            setAutenticado(true);
-          } else {
-            // Token inválido ou revogado — limpar sessão e pedir senha
-            sessionStorage.removeItem("painel_acesso_token");
-            sessionStorage.removeItem("painel_acesso_usuario");
-            setAutenticado(verificarSenhaAcesso());
-          }
-        })
-        .catch(() => {});
-    } else if (!isAdminRoute) {
-      // Tentar restaurar da sessão (funcionário que já acessou antes)
-      const savedToken = sessionStorage.getItem("painel_acesso_token");
-      const savedUsuario = sessionStorage.getItem("painel_acesso_usuario");
-      if (savedToken && savedUsuario) {
-        try {
-          setUsuarioAcesso(JSON.parse(savedUsuario));
+    const token = tokenURL || tokenSessao;
+    if (!token) return;
+
+    // Validar token no backend e registrar log de acesso
+    fetch("/api/acesso/validar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.valido && data.usuario) {
+          setUsuarioAcesso(data.usuario);
+          sessionStorage.setItem("painel_acesso_token", token);
+          sessionStorage.setItem("painel_acesso_usuario", JSON.stringify(data.usuario));
           setAutenticado(true);
-        } catch { /* ignore */ }
-      }
-    }
+        } else {
+          // Token inválido/revogado — limpar sessão mas AINDA abrir o painel
+          // (não mostrar tela de senha para quem veio por link)
+          sessionStorage.removeItem("painel_acesso_token");
+          sessionStorage.removeItem("painel_acesso_usuario");
+          // Se veio por link mas token inválido, mostrar painel mesmo assim
+          // (o admin pode ter revogado, mas não bloqueamos o acesso com senha)
+          setAutenticado(verificarSenhaAcesso());
+        }
+      })
+      .catch(() => {
+        // Erro de rede: se veio por link, abrir o painel mesmo assim
+        const savedUsuario = sessionStorage.getItem("painel_acesso_usuario");
+        if (savedUsuario) {
+          try { setUsuarioAcesso(JSON.parse(savedUsuario)); } catch { /* ignore */ }
+        }
+        setAutenticado(true);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminRoute]);
 
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          {/* translate="no" previne o Google Translate de modificar o DOM e causar erros no React */}
           <div translate="no" className="contents">
             <Toaster theme="dark" position="top-right" />
             {isAdminRoute ? (
               <AdminAcesso />
+            ) : autenticado === "loading" ? (
+              <CarregandoAcesso />
             ) : autenticado ? (
               <Router />
             ) : (
