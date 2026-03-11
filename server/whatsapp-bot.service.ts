@@ -1,17 +1,15 @@
 /**
  * whatsapp-bot.service.ts
  * Chatbot jurídico via WhatsApp — integração Z-API + TJSP
- * Funciona EXCLUSIVAMENTE no grupo autorizado "Painel Puxada Adv"
+ * Funciona EXCLUSIVAMENTE no grupo autorizado
  *
- * Comandos rápidos (sem menu):
+ * Comandos rápidos:
  *   OAB 200287
  *   CPF 123.456.789-00
  *   CNPJ 12.345.678/0001-90
  *   PROCESSO 1234567-89.2023.8.26.0100
  *   NOME João da Silva
- *
- * Comandos de navegação:
- *   menu / ajuda / help
+ *   ajuda / menu
  */
 
 import { enviarTextoGrupo, enviarDocumentoGrupo } from "./zapi.service";
@@ -25,7 +23,6 @@ import {
   type ProcessoResumo,
   type ProcessoDetalhe,
 } from "./tjsp-http.service";
-import { gerarAlvaraPDF } from "./alvara.service";
 
 // ─── Grupo autorizado ─────────────────────────────────────────────────────────
 const GRUPO_AUTORIZADO = process.env.ZAPI_GRUPO_ID || "120363410236215446-group";
@@ -36,9 +33,7 @@ interface EstadoConversa {
   tipoBusca?: "oab" | "cpf" | "processo" | "nome";
   ultimaAtividade: number;
 }
-
 const conversas = new Map<string, EstadoConversa>();
-
 setInterval(() => {
   const agora = Date.now();
   Array.from(conversas.entries()).forEach(([key, estado]) => {
@@ -47,18 +42,17 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 // ─── Mensagens ────────────────────────────────────────────────────────────────
-
 const MENU_AJUDA = `⚖️ *PAINEL JURÍDICO TJSP*
 _Consulta Processual — Comandos Disponíveis_
 
-*Comandos rápidos (use diretamente):*
-• \`OAB 200287\` — busca por OAB
-• \`CPF 12345678900\` — busca por CPF
-• \`CNPJ 12345678000190\` — busca por CNPJ
-• \`PROCESSO 1234567-89.2023.8.26.0100\` — busca por nº do processo
-• \`NOME João da Silva\` — busca por nome
+*Comandos rápidos:*
+• \`OAB 200287\`
+• \`CPF 12345678900\`
+• \`CNPJ 12345678000190\`
+• \`PROCESSO 1234567-89.2023.8.26.0100\`
+• \`NOME João da Silva\`
 
-*Comandos de menu (passo a passo):*
+*Menu passo a passo:*
 • \`1\` — Buscar por OAB
 • \`2\` — Buscar por CPF / CNPJ
 • \`3\` — Buscar por Nº do Processo
@@ -67,177 +61,285 @@ _Consulta Processual — Comandos Disponíveis_
 Digite *ajuda* a qualquer momento para ver este menu.`;
 
 const MSG_SEM_COOKIES = `⚠️ *Sistema Temporariamente Indisponível*
+A conexão com o TJSP está sendo renovada. Tente novamente em alguns minutos.`;
 
-A conexão com o TJSP está sendo renovada.
-Tente novamente em alguns minutos.`;
-
-// ─── Enriquecimento de CPF ────────────────────────────────────────────────────
+// ─── Interfaces da API de enriquecimento ─────────────────────────────────────
 interface DadosCPF {
+  status?: string;
+  cpf?: string | number;
   nome?: string;
-  cpf?: string;
-  dataNascimento?: string;
-  idade?: number;
+  nascimento?: string;       // formato DD/MM/AAAA
+  dataNascimento?: string;   // alternativo
   rendaPresumida?: number;
-  telefones?: { itens?: Array<{ numero_completo?: string }> };
+  score?: { CSBA?: number; faixa_CSBA?: string };
+  telefones?: {
+    total?: number;
+    itens?: Array<{
+      ddd?: number;
+      numero?: number;
+      numero_completo?: string;
+    }>;
+  };
 }
 
-async function enriquecerCPF(cpf: string): Promise<DadosCPF | null> {
+interface PessoaNome {
+  nome?: string;
+  cpf?: string | number;
+  nascimento?: string;
+  score?: unknown;
+}
+
+// ─── Helpers de enriquecimento ────────────────────────────────────────────────
+
+/** Busca dados completos pelo CPF */
+async function buscarPorCPF(cpf: string): Promise<DadosCPF | null> {
   try {
-    const cpfLimpo = cpf.replace(/\D/g, "");
+    const cpfLimpo = String(cpf).replace(/\D/g, "");
     if (cpfLimpo.length !== 11) return null;
     const url = `https://gwfhslsfukikfbyvysms.supabase.co/functions/v1/consulta-cpf?token=bdd5ba8bf04400a22677a47550437bd5&cpf=${cpfLimpo}`;
-    const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+    const resp = await fetch(url, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
     if (!resp.ok) return null;
-    return await resp.json() as DadosCPF;
+    const data = await resp.json() as DadosCPF;
+    if (data.status !== "OK" && !data.cpf) return null;
+    return data;
   } catch {
     return null;
   }
 }
 
+/** Busca CPF pelo nome completo */
+async function buscarCPFPorNome(nome: string): Promise<string | null> {
+  try {
+    const nomeLimpo = nome.trim().toUpperCase();
+    const url = `https://gwfhslsfukikfbyvysms.supabase.co/functions/v1/consulta?token=bdd5ba8bf04400a22677a47550437bd5&name=${encodeURIComponent(nomeLimpo)}`;
+    const resp = await fetch(url, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as { itens?: PessoaNome[] };
+    const itens = data.itens || [];
+    if (itens.length === 0) return null;
+    // Pegar o primeiro resultado com CPF
+    const pessoa = itens.find(p => p.cpf);
+    return pessoa?.cpf ? String(pessoa.cpf).replace(/\D/g, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Formata CPF: 50731688872 → 507.316.888-72 */
+function formatarCPF(cpf: string | number): string {
+  const d = String(cpf).replace(/\D/g, "");
+  if (d.length === 11) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+  return String(cpf);
+}
+
+/** Calcula idade a partir de DD/MM/AAAA */
 function calcularIdade(dataNasc: string): number | null {
   try {
-    // Formato: DD/MM/AAAA
-    const [d, m, a] = dataNasc.split("/").map(Number);
+    const partes = dataNasc.split("/");
+    if (partes.length !== 3) return null;
+    const [d, m, a] = partes.map(Number);
     const nasc = new Date(a, m - 1, d);
     const hoje = new Date();
     let idade = hoje.getFullYear() - nasc.getFullYear();
-    const mesAtual = hoje.getMonth() + 1;
-    if (mesAtual < m || (mesAtual === m && hoje.getDate() < d)) idade--;
+    if (hoje.getMonth() + 1 < m || (hoje.getMonth() + 1 === m && hoje.getDate() < d)) idade--;
     return idade;
   } catch {
     return null;
   }
 }
 
-function formatarCPF(cpf: string): string {
-  const d = cpf.replace(/\D/g, "");
-  if (d.length === 11) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
-  return cpf;
+/** Extrai telefones formatados da resposta da API */
+function extrairTelefones(dados: DadosCPF): string {
+  const itens = dados.telefones?.itens || [];
+  if (itens.length === 0) return "N/D";
+  return itens
+    .map(t => t.numero_completo || (t.ddd && t.numero ? `${t.ddd}${t.numero}` : null))
+    .filter(Boolean)
+    .join(", ");
 }
 
-// ─── Formatação de processo detalhado ─────────────────────────────────────────
-async function formatarProcessoDetalhado(
+// ─── Formatação de processo ───────────────────────────────────────────────────
+
+interface DadosProcessoFormatado {
+  texto: string;
+  dadosAlvara: {
+    numeroProcesso: string;
+    valorCausa: string;
+    nomeReclamante: string;
+    cpfReclamante: string;
+    nomeAdvogado: string;
+    nomeReu: string;
+  };
+}
+
+async function formatarProcesso(
   processo: ProcessoResumo,
+  detalhe: ProcessoDetalhe | null,
   index: number,
   total: number,
   oabConsultante?: string
-): Promise<string> {
-  // Buscar detalhes completos do processo
-  let detalhe: ProcessoDetalhe | null = null;
-  try {
-    if (processo.codigoProcesso && processo.foroProcesso) {
-      detalhe = await obterDetalheProcesso(processo.codigoProcesso, processo.foroProcesso);
+): Promise<DadosProcessoFormatado> {
+  const sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+  const partes = detalhe?.partes || [];
+
+  // Identificar polo ativo e passivo
+  const poloAtivo = partes.find(p =>
+    /reqte|requerente|exeqte|exequente|autor|impte|impetrante|apelante|reclamante|embargante/i.test(p.tipo)
+  );
+  const poloPassivo = partes.find(p =>
+    /reqdo|requerido|executado|réu|reu|apelado|reclamado|embargado|impetrado/i.test(p.tipo)
+  );
+
+  // Enriquecer polo ativo: primeiro tenta pelo CPF, se não tiver busca pelo nome
+  let dadosCPF: DadosCPF | null = null;
+  let cpfEncontrado = "";
+
+  if (poloAtivo) {
+    // Tentar CPF direto (TJSP raramente fornece)
+    if (poloAtivo.cpfCnpj && poloAtivo.cpfCnpj.replace(/\D/g, "").length === 11) {
+      cpfEncontrado = poloAtivo.cpfCnpj.replace(/\D/g, "");
+      dadosCPF = await buscarPorCPF(cpfEncontrado);
     }
-  } catch {
-    // continua sem detalhe
+
+    // Se não tem CPF, buscar pelo nome
+    if (!dadosCPF && poloAtivo.nome && poloAtivo.nome.length > 3) {
+      const cpfPorNome = await buscarCPFPorNome(poloAtivo.nome);
+      if (cpfPorNome) {
+        cpfEncontrado = cpfPorNome;
+        dadosCPF = await buscarPorCPF(cpfPorNome);
+      }
+    }
   }
 
-  const sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+  const nome = dadosCPF?.nome || poloAtivo?.nome || "N/D";
+  const cpfFormatado = cpfEncontrado ? formatarCPF(cpfEncontrado) : "N/D";
+  const dataNasc = dadosCPF?.nascimento || dadosCPF?.dataNascimento || "";
+  const idade = dataNasc ? calcularIdade(dataNasc) : null;
+  const telefones = dadosCPF ? extrairTelefones(dadosCPF) : "N/D";
+  const renda = dadosCPF?.rendaPresumida;
+  const advogado = poloAtivo?.advogado || "";
+  const nomeReu = poloPassivo?.nome || "N/D";
 
   let msg = `📌 *Processo ${index}/${total}*\n${sep}\n`;
   msg += `*PROCESSO:* \`${processo.numeroProcesso || "N/D"}\`\n\n`;
 
-  // Partes do processo
-  const partes = detalhe?.partes || [];
-  const poloAtivo = partes.filter(p =>
-    /reqte|requerente|exeqte|exequente|autor|impte|impetrante|apelante|reclamante|embargante/i.test(p.tipo)
-  );
-  const poloPassivo = partes.filter(p =>
-    /reqdo|requerido|executado|réu|reu|apelado|reclamado|embargado|impetrado/i.test(p.tipo)
-  );
+  // Dados enriquecidos do polo ativo
+  msg += `👤 *Nome:* ${nome}\n`;
+  msg += `💳 *CPF:* ${cpfFormatado}\n`;
+  if (dataNasc) msg += `🎂 *Data Nascimento:* ${dataNasc}${idade ? ` (IDADE: ${idade})` : ""}\n`;
+  if (renda) msg += `💰 *Renda Presumida:* ${renda}\n`;
+  msg += `📞 *Telefones:* ${telefones}\n\n`;
 
-  // Enriquecer polo ativo (primeiro)
-  if (poloAtivo.length > 0) {
-    const parte = poloAtivo[0];
-    let dadosCPF: DadosCPF | null = null;
-    if (parte.cpfCnpj) {
-      dadosCPF = await enriquecerCPF(parte.cpfCnpj);
-    }
-
-    const nome = dadosCPF?.nome || parte.nome || "N/D";
-    const cpfFormatado = parte.cpfCnpj ? formatarCPF(parte.cpfCnpj) : "N/D";
-    const dataNasc = dadosCPF?.dataNascimento || "";
-    const idade = dataNasc ? calcularIdade(dataNasc) : null;
-    const renda = dadosCPF?.rendaPresumida;
-    const telefones = dadosCPF?.telefones?.itens
-      ?.map(t => t.numero_completo)
-      .filter(Boolean)
-      .join(", ") || "N/D";
-
-    msg += `👤 *Nome:* ${nome}\n`;
-    msg += `💳 *CPF:* ${cpfFormatado}\n`;
-    if (dataNasc) {
-      msg += `🎂 *Data Nascimento:* ${dataNasc}${idade ? ` (IDADE: ${idade})` : ""}\n`;
-    }
-    if (renda) msg += `💰 *Renda Presumida:* ${renda}\n`;
-    msg += `📞 *Telefones:* ${telefones}\n\n`;
-
-    // Polo ativo
-    const tipoLabel = parte.tipo || "Requerente (Polo Ativo)";
-    msg += `*${tipoLabel}:*\n`;
-    msg += `👤 *Nome:* ${nome}\n`;
-    if (parte.cpfCnpj) msg += `💳 *Doc.:* ${cpfFormatado}\n`;
-    if (parte.advogado) msg += `⚖️ *Advogado:* ${parte.advogado}\n`;
+  // Polo ativo
+  const tipoAtivoLabel = poloAtivo?.tipo || "Requerente (Polo Ativo)";
+  msg += `*${tipoAtivoLabel}:*\n`;
+  msg += `👤 *Nome:* ${nome}\n`;
+  if (cpfEncontrado) msg += `💳 *Doc.:* CPF: ${cpfFormatado}\n`;
+  if (advogado) {
+    msg += `⚖️ *Advogado:* ${advogado}\n`;
     if (oabConsultante) msg += `   *OAB:* ${oabConsultante}\n`;
-    msg += "\n";
   }
+  msg += "\n";
 
   // Polo passivo
-  if (poloPassivo.length > 0) {
-    const parte = poloPassivo[0];
-    const tipoLabel = parte.tipo || "Requerido (Polo Passivo)";
-    msg += `*${tipoLabel}:*\n`;
-    msg += `🏢 *Nome:* ${parte.nome || "N/D"}\n`;
-    if (parte.cpfCnpj) msg += `💳 *Doc.:* ${formatarCPF(parte.cpfCnpj)}\n`;
+  if (poloPassivo) {
+    const tipoPassivoLabel = poloPassivo.tipo || "Requerido (Polo Passivo)";
+    msg += `*${tipoPassivoLabel}:*\n`;
+    msg += `🏢 *Nome:* ${nomeReu}\n`;
+    if (poloPassivo.cpfCnpj) msg += `💳 *Doc.:* ${formatarCPF(poloPassivo.cpfCnpj)}\n`;
     msg += "\n";
   }
 
   // Dados da ação
   msg += `*Dados da Ação:*\n`;
-  if (detalhe?.assunto || processo.assunto) msg += `⚖️ *Natureza:* ${detalhe?.assunto || processo.assunto}\n`;
-  if (detalhe?.valor || processo.valor) msg += `💰 *Valor da Causa:* ${detalhe?.valor || processo.valor}\n`;
-  if (detalhe?.dataDistribuicao || processo.data) msg += `🗓️ *Data de Início:* ${detalhe?.dataDistribuicao || processo.data}\n`;
-  if (detalhe?.classe || processo.classe) msg += `📋 *Classe:* ${detalhe?.classe || processo.classe}\n`;
-  if (detalhe?.tribunal || processo.tribunal) msg += `🏛️ *Tribunal:* ${detalhe?.tribunal || processo.tribunal || "Tribunal de Justiça do Estado de São Paulo"}\n`;
-  if (detalhe?.vara || processo.vara) msg += `📍 *Órgão Julgador:* ${detalhe?.vara || processo.vara}\n`;
+  const assunto = detalhe?.assunto || processo.assunto || "";
+  const valor = detalhe?.valor || processo.valor || "N/D";
+  const dataInicio = detalhe?.dataDistribuicao || processo.data || "";
+  const classe = detalhe?.classe || processo.classe || "";
+  const vara = detalhe?.vara || processo.vara || "";
+  const tribunal = detalhe?.tribunal || processo.tribunal || "Tribunal de Justiça do Estado de São Paulo";
+
+  if (assunto) msg += `⚖️ *Natureza:* ${assunto}\n`;
+  msg += `💰 *Valor da Causa:* ${valor}\n`;
+  if (dataInicio) msg += `🗓️ *Data de Início:* ${dataInicio}\n`;
+  if (classe) msg += `📋 *Classe:* ${classe}\n`;
+  msg += `🏛️ *Tribunal:* ${tribunal}\n`;
+  if (vara) msg += `📍 *Órgão Julgador:* ${vara}\n`;
 
   const agora = new Date();
   const dataCaptura = agora.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
   msg += `📅 *Data de Captura:* ${dataCaptura}\n`;
-
   if (oabConsultante) msg += `📌 *OAB Consultante:* ${oabConsultante}\n`;
 
-  return msg;
+  return {
+    texto: msg,
+    dadosAlvara: {
+      numeroProcesso: processo.numeroProcesso,
+      valorCausa: valor,
+      nomeReclamante: nome,
+      cpfReclamante: cpfEncontrado,
+      nomeAdvogado: advogado,
+      nomeReu,
+    },
+  };
 }
 
 // ─── Gerar e enviar PDF do alvará ─────────────────────────────────────────────
-async function enviarAlvaraProcesso(processo: ProcessoResumo, detalhePartes: ProcessoDetalhe | null): Promise<void> {
+async function gerarEEnviarAlvara(dadosAlvara: {
+  numeroProcesso: string;
+  valorCausa: string;
+  nomeReclamante: string;
+  cpfReclamante: string;
+  nomeAdvogado: string;
+  nomeReu: string;
+}): Promise<void> {
   try {
-    const partes = detalhePartes?.partes || [];
-    const poloAtivo = partes.find(p =>
-      /reqte|requerente|exeqte|exequente|autor|impte|impetrante|apelante|reclamante|embargante/i.test(p.tipo)
-    );
-    const poloPassivo = partes.find(p =>
-      /reqdo|requerido|executado|réu|reu|apelado|reclamado|embargado|impetrado/i.test(p.tipo)
-    );
-
-    const pdfBuffer = await gerarAlvaraPDF({
-      numeroProcesso: processo.numeroProcesso,
-      valorCausa: detalhePartes?.valor || processo.valor || "N/D",
-      nomeReclamante: poloAtivo?.nome || "N/D",
-      cpfReclamante: poloAtivo?.cpfCnpj || "",
-      nomeAdvogado: poloAtivo?.advogado || "",
-      nomeReu: poloPassivo?.nome || "N/D",
-      dataAtuacao: new Date().toLocaleDateString("pt-BR"),
+    // Chamar o endpoint interno de geração de alvará
+    const resp = await fetch("http://localhost:3000/api/alvara/gerar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        numeroProcesso: dadosAlvara.numeroProcesso,
+        valorCausa: dadosAlvara.valorCausa,
+        nomeReclamante: dadosAlvara.nomeReclamante,
+        cpfReclamante: dadosAlvara.cpfReclamante,
+        nomeAdvogado: dadosAlvara.nomeAdvogado,
+        nomeReu: dadosAlvara.nomeReu,
+        dataAtuacao: new Date().toLocaleDateString("pt-BR"),
+      }),
+      signal: AbortSignal.timeout(30000),
     });
 
-    // Converter buffer para base64
-    const base64 = pdfBuffer.toString("base64");
-    const nomeArquivo = `alvara_${processo.numeroProcesso.replace(/[^0-9]/g, "")}.pdf`;
+    if (!resp.ok) {
+      console.error("[BOT] Erro ao gerar alvará HTTP:", resp.status);
+      return;
+    }
 
-    await enviarDocumentoGrupo(GRUPO_AUTORIZADO, base64, nomeArquivo, `📄 Alvará — ${processo.numeroProcesso}`);
+    const contentType = resp.headers.get("content-type") || "";
+    if (!contentType.includes("pdf")) {
+      console.error("[BOT] Resposta do alvará não é PDF:", contentType);
+      return;
+    }
+
+    const pdfBuffer = Buffer.from(await resp.arrayBuffer());
+    const base64 = pdfBuffer.toString("base64");
+    const nomeArquivo = `alvara_${dadosAlvara.numeroProcesso.replace(/[^0-9]/g, "")}.pdf`;
+    const caption = `📄 *Alvará — ${dadosAlvara.numeroProcesso}*`;
+
+    const ok = await enviarDocumentoGrupo(GRUPO_AUTORIZADO, base64, nomeArquivo, caption);
+    if (!ok) {
+      console.error("[BOT] Falha ao enviar PDF do alvará:", dadosAlvara.numeroProcesso);
+    } else {
+      console.log("[BOT] Alvará enviado com sucesso:", dadosAlvara.numeroProcesso);
+    }
   } catch (err) {
-    console.error("[BOT] Erro ao gerar alvará:", err);
+    console.error("[BOT] Erro ao gerar/enviar alvará:", err);
   }
 }
 
@@ -270,48 +372,57 @@ async function executarBuscaCompleta(
     const total = processos.length;
 
     if (total === 0) {
-      await enviarTextoGrupo(GRUPO_AUTORIZADO, `❌ *Nenhum processo encontrado* para esta consulta.\n\nDigite *ajuda* para ver os comandos.`);
+      await enviarTextoGrupo(GRUPO_AUTORIZADO,
+        `❌ *Nenhum processo encontrado* para ${tipo.toUpperCase()} ${valor}.\n\nDigite *ajuda* para ver os comandos.`
+      );
       return;
     }
 
-    // Aviso inicial com total
     await enviarTextoGrupo(GRUPO_AUTORIZADO,
-      `📋 *${total} processo(s) encontrado(s)* para ${tipo.toUpperCase()} ${valor}\n\n_Enviando todos os processos com detalhes e alvarás..._`
+      `📋 *${total} processo(s) encontrado(s)* para ${tipo.toUpperCase()} ${valor}\n\n_Carregando detalhes e gerando alvarás..._`
     );
 
-    // Enviar TODOS os processos sem limite
-    for (let i = 0; i < processos.length; i++) {
-      const p = processos[i];
+    // ── Processar em lotes paralelos de 5 para velocidade ──
+    const LOTE = 5;
+    for (let i = 0; i < processos.length; i += LOTE) {
+      const lote = processos.slice(i, i + LOTE);
 
-      // Buscar detalhes para o alvará
-      let detalhe: ProcessoDetalhe | null = null;
-      try {
-        if (p.codigoProcesso && p.foroProcesso) {
-          detalhe = await obterDetalheProcesso(p.codigoProcesso, p.foroProcesso);
-        }
-      } catch { /* continua */ }
+      // Buscar detalhes em paralelo para o lote
+      const detalhes = await Promise.all(
+        lote.map(async (p) => {
+          try {
+            if (p.codigoProcesso && p.foroProcesso) {
+              return await obterDetalheProcesso(p.codigoProcesso, p.foroProcesso);
+            }
+          } catch { /* continua sem detalhe */ }
+          return null;
+        })
+      );
 
-      // Formatar e enviar texto do processo
-      const msgProcesso = await formatarProcessoDetalhado(p, i + 1, total, oabConsultante);
-      await enviarTextoGrupo(GRUPO_AUTORIZADO, msgProcesso);
+      // Formatar cada processo do lote em paralelo
+      const formatados = await Promise.all(
+        lote.map((p, idx) => formatarProcesso(p, detalhes[idx], i + idx + 1, total, oabConsultante))
+      );
 
-      // Enviar PDF do alvará
-      await enviarAlvaraProcesso(p, detalhe);
-
-      // Pequena pausa para não sobrecarregar a Z-API
-      if (i < processos.length - 1) {
-        await new Promise(r => setTimeout(r, 1500));
+      // Enviar texto + PDF de cada processo do lote sequencialmente
+      for (const fmt of formatados) {
+        await enviarTextoGrupo(GRUPO_AUTORIZADO, fmt.texto);
+        // Enviar PDF do alvará logo após o texto do processo
+        await gerarEEnviarAlvara(fmt.dadosAlvara);
+        // Pequena pausa para não sobrecarregar a Z-API
+        await new Promise(r => setTimeout(r, 800));
       }
     }
 
-    // Mensagem final
     await enviarTextoGrupo(GRUPO_AUTORIZADO,
-      `✅ *Consulta concluída!*\n\n${total} processo(s) enviado(s) com detalhes e alvarás.\n\nDigite *ajuda* para nova consulta.`
+      `✅ *Consulta concluída!*\n\n${total} processo(s) enviado(s) com dados completos e alvarás.\n\nDigite *ajuda* para nova consulta.`
     );
 
   } catch (err) {
     console.error("[BOT] Erro na busca:", err);
-    await enviarTextoGrupo(GRUPO_AUTORIZADO, `❌ *Erro ao consultar o TJSP*\n\nTente novamente ou contate o administrador.`);
+    await enviarTextoGrupo(GRUPO_AUTORIZADO,
+      `❌ *Erro ao consultar o TJSP*\n\nTente novamente ou contate o administrador.`
+    );
   }
 }
 
@@ -344,7 +455,7 @@ function detectarComandoRapido(texto: string): ComandoRapido | null {
     return { tipo: "processo", valor: t };
   }
 
-  // Detecção automática de CPF (11 dígitos)
+  // Detecção automática de CPF (11 dígitos) ou CNPJ (14 dígitos)
   const digits = t.replace(/\D/g, "");
   if (digits.length === 11) return { tipo: "cpf", valor: t };
   if (digits.length === 14) return { tipo: "cpf", valor: t };
@@ -380,7 +491,9 @@ export async function processarMensagem(
   const comandoRapido = detectarComandoRapido(msg);
   if (comandoRapido) {
     conversas.delete(phone);
-    await enviarTextoGrupo(GRUPO_AUTORIZADO, `⏳ *Buscando no TJSP...*\n\nAguarde, estamos carregando todos os processos com detalhes completos.`);
+    await enviarTextoGrupo(GRUPO_AUTORIZADO,
+      `⏳ *Buscando no TJSP...*\n\nAguarde, estamos carregando os processos com dados completos e gerando os alvarás.`
+    );
     await executarBuscaCompleta(comandoRapido.tipo, comandoRapido.valor);
     return;
   }
@@ -391,10 +504,10 @@ export async function processarMensagem(
 
   if (estado.etapa === "menu") {
     const opcoes: Record<string, { tipo: "oab" | "cpf" | "processo" | "nome"; label: string; exemplo: string }> = {
-      "1": { tipo: "oab",      label: "OAB",          exemplo: "Ex: *200287* ou *SP200.287*" },
-      "2": { tipo: "cpf",      label: "CPF / CNPJ",   exemplo: "Ex: *123.456.789-00*" },
-      "3": { tipo: "processo", label: "Nº Processo",  exemplo: "Ex: *1234567-89.2023.8.26.0100*" },
-      "4": { tipo: "nome",     label: "Nome",         exemplo: "Ex: *João da Silva*" },
+      "1": { tipo: "oab",      label: "OAB",         exemplo: "Ex: *200287* ou *SP200.287*" },
+      "2": { tipo: "cpf",      label: "CPF / CNPJ",  exemplo: "Ex: *123.456.789-00*" },
+      "3": { tipo: "processo", label: "Nº Processo", exemplo: "Ex: *1234567-89.2023.8.26.0100*" },
+      "4": { tipo: "nome",     label: "Nome",        exemplo: "Ex: *João da Silva*" },
     };
 
     const opcao = opcoes[msgLower];
@@ -409,10 +522,12 @@ export async function processarMensagem(
     return;
   }
 
-  // ── Aguardando valor de busca (fluxo de menu) ──
+  // ── Aguardando valor de busca ──
   if (estado.etapa === "aguardando_busca" && estado.tipoBusca) {
     const tipo = estado.tipoBusca;
-    await enviarTextoGrupo(GRUPO_AUTORIZADO, `⏳ *Buscando no TJSP...*\n\nAguarde, estamos carregando todos os processos com detalhes completos.`);
+    await enviarTextoGrupo(GRUPO_AUTORIZADO,
+      `⏳ *Buscando no TJSP...*\n\nAguarde, estamos carregando os processos com dados completos e gerando os alvarás.`
+    );
     await executarBuscaCompleta(tipo, msg);
     conversas.set(phone, { etapa: "menu", ultimaAtividade: Date.now() });
     return;

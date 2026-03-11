@@ -75,7 +75,7 @@ export async function enviarDocumentoGrupo(
       headers: headers(),
       body: JSON.stringify({
         phone: grupoId,
-        document: base64,
+        document: base64.startsWith("data:") ? base64 : `data:application/pdf;base64,${base64}`,
         fileName: nomeArquivo,
         caption: caption || "",
         extension: "pdf",
