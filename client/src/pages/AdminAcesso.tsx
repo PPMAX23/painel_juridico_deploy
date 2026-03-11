@@ -6,6 +6,7 @@ interface Usuario {
   nome: string;
   email?: string;
   token: string;
+  linkCurto?: string;  // código do link camuflado
   ativo: boolean;
   permBuscar: boolean;
   permEnriquecimento: boolean;
@@ -222,8 +223,27 @@ function AbaUsuarios() {
 
   useEffect(() => { carregar(); }, [carregar]);
 
-  const copiarLink = (u: Usuario) => {
-    const url = `${window.location.origin}/?token=${u.token}`;
+  const copiarLink = async (u: Usuario) => {
+    let codigo = u.linkCurto;
+    // Se não tiver link curto ainda, buscar/gerar no backend
+    if (!codigo) {
+      try {
+        const r = await fetch(`/api/admin/usuarios/${u.id}/link-curto`);
+        const data = await r.json();
+        codigo = data.codigo;
+        // Atualizar localmente
+        setUsuarios(prev => prev.map(x => x.id === u.id ? { ...x, linkCurto: codigo } : x));
+      } catch {
+        // fallback: usar token direto
+        const url = `${window.location.origin}/?token=${u.token}`;
+        navigator.clipboard.writeText(url);
+        setLinkCopiado(u.id);
+        setTimeout(() => setLinkCopiado(null), 2000);
+        return;
+      }
+    }
+    // Usar o link camuflado /acesso/:codigo
+    const url = `${window.location.origin}/acesso/${codigo}`;
     navigator.clipboard.writeText(url);
     setLinkCopiado(u.id);
     setTimeout(() => setLinkCopiado(null), 2000);

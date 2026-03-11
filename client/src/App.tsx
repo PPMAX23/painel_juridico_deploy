@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import Painel from "@/pages/Painel";
 import AdminAcesso from "@/pages/AdminAcesso";
-import { Route, Switch, useLocation } from "wouter";
+import { Route, Switch, useLocation, useParams } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
@@ -82,39 +82,70 @@ function AcessoNegado({ motivo }: { motivo: string }) {
   );
 }
 
-type EstadoAcesso = "loading" | "liberado" | "bloqueado";
+// Componente que resolve o link curto e redireciona
+function ResolverAcessoCurto() {
+  const params = useParams<{ codigo: string }>();
+  const [, navigate] = useLocation();
+  const [estado, setEstado] = useState<"loading" | "bloqueado">("loading");
+  const [motivo, setMotivo] = useState("");
 
-function Router() {
-  return (
-    <Switch>
-      <Route path={"/"} component={Painel} />
-      <Route path={"/painel"} component={Painel} />
-      <Route path={"/admin"} component={AdminAcesso} />
-      <Route path={"/404"} component={NotFound} />
-      <Route component={NotFound} />
-    </Switch>
-  );
+  useEffect(() => {
+    const codigo = params.codigo;
+    if (!codigo) {
+      setMotivo("Código de acesso inválido.");
+      setEstado("bloqueado");
+      return;
+    }
+
+    // O backend já faz o redirect via /api/acesso/:codigo
+    // Mas como estamos no frontend SPA, precisamos buscar o token via API
+    fetch(`/api/acesso/${codigo}`, { redirect: "manual" })
+      .then(async r => {
+        if (r.status === 302 || r.type === "opaqueredirect") {
+          // Redirect aconteceu — seguir manualmente
+          // Tentar obter o token via endpoint dedicado
+          const r2 = await fetch(`/api/acesso/resolver/${codigo}`);
+          if (r2.ok) {
+            const data = await r2.json();
+            if (data.token) {
+              navigate(`/?token=${data.token}`, { replace: true });
+            } else {
+              setMotivo(data.motivo || "Link de acesso inválido.");
+              setEstado("bloqueado");
+            }
+          } else {
+            setMotivo("Link de acesso inválido ou expirado.");
+            setEstado("bloqueado");
+          }
+        } else {
+          setMotivo("Link de acesso inválido.");
+          setEstado("bloqueado");
+        }
+      })
+      .catch(() => {
+        setMotivo("Erro ao verificar acesso. Tente novamente.");
+        setEstado("bloqueado");
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (estado === "bloqueado") return <AcessoNegado motivo={motivo} />;
+  return <CarregandoAcesso />;
 }
 
-function App() {
-  const [location] = useLocation();
-  const isAdminRoute = location === "/admin";
+type EstadoAcesso = "loading" | "liberado" | "bloqueado";
 
+function PainelComValidacao() {
   const tokenURL = new URLSearchParams(window.location.search).get("token");
   const tokenSessao = sessionStorage.getItem("painel_acesso_token");
   const token = tokenURL || tokenSessao;
 
-  // Se não há token nenhum, acesso livre ao painel
-  // Se há token, precisamos validar antes de liberar
-  const [estado, setEstado] = useState<EstadoAcesso>(
-    isAdminRoute ? "liberado" : token ? "loading" : "liberado"
-  );
+  const [estado, setEstado] = useState<EstadoAcesso>(token ? "loading" : "liberado");
   const [motivoBloqueio, setMotivoBloqueio] = useState<string>("");
 
   useEffect(() => {
-    if (isAdminRoute || !token) return;
+    if (!token) return;
 
-    // Validar token no backend
     fetch("/api/acesso/validar", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -123,13 +154,11 @@ function App() {
       .then(r => r.json())
       .then(data => {
         if (data.valido && data.usuario) {
-          // Token válido: salvar usuário e liberar acesso
           setUsuarioAcesso(data.usuario);
           sessionStorage.setItem("painel_acesso_token", token);
           sessionStorage.setItem("painel_acesso_usuario", JSON.stringify(data.usuario));
           setEstado("liberado");
         } else {
-          // Token inválido, revogado ou expirado: bloquear acesso
           sessionStorage.removeItem("painel_acesso_token");
           sessionStorage.removeItem("painel_acesso_usuario");
           const motivo = data.motivo || "Link de acesso inválido ou expirado.";
@@ -138,37 +167,47 @@ function App() {
         }
       })
       .catch(() => {
-        // Erro de rede: tentar restaurar da sessão
         const savedUsuario = sessionStorage.getItem("painel_acesso_usuario");
         if (savedUsuario) {
           try {
             setUsuarioAcesso(JSON.parse(savedUsuario));
             setEstado("liberado");
           } catch {
-            setEstado("liberado"); // fallback: liberar em caso de erro de rede
+            setEstado("liberado");
           }
         } else {
-          setEstado("liberado"); // sem sessão salva, liberar normalmente
+          setEstado("liberado");
         }
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminRoute]);
+  }, []);
 
+  if (estado === "loading") return <CarregandoAcesso />;
+  if (estado === "bloqueado") return <AcessoNegado motivo={motivoBloqueio} />;
+  return <Painel />;
+}
+
+function Router() {
+  return (
+    <Switch>
+      <Route path={"/"} component={PainelComValidacao} />
+      <Route path={"/painel"} component={PainelComValidacao} />
+      <Route path={"/acesso/:codigo"} component={ResolverAcessoCurto} />
+      <Route path={"/admin"} component={AdminAcesso} />
+      <Route path={"/404"} component={NotFound} />
+      <Route component={NotFound} />
+    </Switch>
+  );
+}
+
+function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <div translate="no" className="contents">
             <Toaster theme="dark" position="top-right" />
-            {isAdminRoute ? (
-              <AdminAcesso />
-            ) : estado === "loading" ? (
-              <CarregandoAcesso />
-            ) : estado === "bloqueado" ? (
-              <AcessoNegado motivo={motivoBloqueio} />
-            ) : (
-              <Router />
-            )}
+            <Router />
           </div>
         </TooltipProvider>
       </ThemeProvider>

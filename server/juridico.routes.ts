@@ -6,6 +6,7 @@ import {
   alterarSenhaAdmin, inicializarAdminConfig,
   listarUsuarios, criarUsuario, atualizarUsuario, revogarUsuario, deletarUsuario, regenerarToken,
   validarToken, registrarLog, listarLogs, estatisticasUsuario,
+  criarLinkCurto, resolverLinkCurto, deletarLinkCurto,
 } from "./acesso.service";
 import {
   buscarPorOAB,
@@ -505,7 +506,9 @@ router.post("/admin/usuarios", requireAdmin, async (req: Request, res: Response)
     limiteConsultasDia: limiteConsultasDia ?? 200,
     expiresAt: expiresAt ? new Date(expiresAt) : null,
   });
-  return res.json(usuario);
+  // Gerar link curto automaticamente ao criar usuário
+  const codigo = await criarLinkCurto(usuario.id, usuario.token);
+  return res.json({ ...usuario, linkCurto: codigo });
 });
 
 router.put("/admin/usuarios/:id", requireAdmin, async (req: Request, res: Response) => {
@@ -525,13 +528,51 @@ router.post("/admin/usuarios/:id/ativar", requireAdmin, async (req: Request, res
 });
 
 router.delete("/admin/usuarios/:id", requireAdmin, async (req: Request, res: Response) => {
-  await deletarUsuario(parseInt(req.params.id));
+  const id = parseInt(req.params.id);
+  await deletarLinkCurto(id); // remover link curto associado
+  await deletarUsuario(id);
   return res.json({ ok: true });
 });
 
 router.post("/admin/usuarios/:id/regenerar-token", requireAdmin, async (req: Request, res: Response) => {
-  const novoToken = await regenerarToken(parseInt(req.params.id));
-  return res.json({ token: novoToken });
+  const id = parseInt(req.params.id);
+  const novoToken = await regenerarToken(id);
+  // Regenerar também o link curto
+  await deletarLinkCurto(id);
+  const novoCodigo = await criarLinkCurto(id, novoToken);
+  return res.json({ token: novoToken, linkCurto: novoCodigo });
+});
+
+// ─── Resolver link curto (retorna token em JSON para o SPA) ─────────────────
+router.get("/acesso/resolver/:codigo", async (req: Request, res: Response) => {
+  const { codigo } = req.params;
+  const token = await resolverLinkCurto(codigo);
+  if (!token) {
+    return res.status(404).json({ valido: false, motivo: "Link de acesso inválido ou expirado" });
+  }
+  return res.json({ valido: true, token });
+});
+
+// ─── Resolver link curto (redirect para compatibilidade) ─────────────────────
+router.get("/acesso/:codigo", async (req: Request, res: Response) => {
+  const { codigo } = req.params;
+  // Não processar se for "validar" (outro endpoint)
+  if (codigo === "validar") return res.status(404).json({ error: "Not found" });
+  const token = await resolverLinkCurto(codigo);
+  if (!token) {
+    return res.redirect(302, `/?acesso=negado&motivo=invalido`);
+  }
+  return res.redirect(302, `/?token=${token}`);
+});
+
+// ─── Obter link curto de um usuário ──────────────────────────────────────────
+router.get("/admin/usuarios/:id/link-curto", requireAdmin, async (req: Request, res: Response) => {
+  const id = parseInt(req.params.id);
+  const usuarios = await listarUsuarios();
+  const usuario = usuarios.find(u => u.id === id);
+  if (!usuario) return res.status(404).json({ error: "Usuário não encontrado" });
+  const codigo = await criarLinkCurto(id, usuario.token);
+  return res.json({ codigo, linkCurto: codigo });
 });
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────

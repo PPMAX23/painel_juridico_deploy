@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { adminConfig, painelUsuarios, painelLogs } from "../drizzle/schema";
+import { adminConfig, painelUsuarios, painelLogs, painelLinksShort } from "../drizzle/schema";
 import { eq, desc, and, gte, sql } from "drizzle-orm";
 import { generateSecret, generateURI, verify as otpVerify } from "otplib";
 import * as QRCode from "qrcode";
@@ -12,9 +12,50 @@ async function db() {
   return d;
 }
 
-// ─── Gerar token único de acesso ──────────────────────────────────────────────
+// ─── Gerar token único de acesso ────────────────────────────────────────────
 export function gerarToken(): string {
   return randomBytes(24).toString("hex");
+}
+
+// ─── Links Curtos (camuflagem) ────────────────────────────────────────────
+// Gera um código alfanumérico curto e único
+function gerarCodigo(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let codigo = "";
+  const bytes = randomBytes(8);
+  for (let i = 0; i < 8; i++) {
+    codigo += chars[bytes[i] % chars.length];
+  }
+  return codigo;
+}
+
+export async function criarLinkCurto(usuarioId: number, token: string): Promise<string> {
+  const d = await db();
+  // Verificar se já existe link para esse usuário
+  const existentes = await d.select().from(painelLinksShort).where(eq(painelLinksShort.usuarioId, usuarioId));
+  if (existentes[0]) return existentes[0].codigo;
+  // Gerar código único
+  let codigo = gerarCodigo();
+  let tentativas = 0;
+  while (tentativas < 10) {
+    const dup = await d.select().from(painelLinksShort).where(eq(painelLinksShort.codigo, codigo));
+    if (!dup[0]) break;
+    codigo = gerarCodigo();
+    tentativas++;
+  }
+  await d.insert(painelLinksShort).values({ codigo, usuarioId, token });
+  return codigo;
+}
+
+export async function resolverLinkCurto(codigo: string): Promise<string | null> {
+  const d = await db();
+  const links = await d.select().from(painelLinksShort).where(eq(painelLinksShort.codigo, codigo));
+  return links[0]?.token || null;
+}
+
+export async function deletarLinkCurto(usuarioId: number): Promise<void> {
+  const d = await db();
+  await d.delete(painelLinksShort).where(eq(painelLinksShort.usuarioId, usuarioId));
 }
 
 // ─── Admin Config ─────────────────────────────────────────────────────────────

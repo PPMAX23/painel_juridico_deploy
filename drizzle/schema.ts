@@ -67,3 +67,14 @@ export const painelLogs = mysqlTable("painel_logs", {
 });
 
 export type PainelLog = typeof painelLogs.$inferSelect;
+
+// ─── Links Curtos (camuflagem de acesso) ──────────────────────────────────────
+export const painelLinksShort = mysqlTable("painel_links_short", {
+  id: int("id").autoincrement().primaryKey(),
+  codigo: varchar("codigo", { length: 16 }).notNull().unique(),   // código curto ex: xK9mP2
+  usuarioId: int("usuarioId").notNull(),                          // FK para painelUsuarios
+  token: varchar("token", { length: 64 }).notNull(),             // token real do usuário
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PainelLinkShort = typeof painelLinksShort.$inferSelect;
