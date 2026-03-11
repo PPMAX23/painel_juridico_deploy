@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { invokeLLM } from "./_core/llm";
+import { processarMensagem } from "./whatsapp-bot.service";
+import { verificarConexao } from "./zapi.service";
 import { obterDDDsPorForo, filtrarPessoasPorDDD } from "./foro-ddd";
 import {
   verificarSenhaAdmin, verificarTOTP, obterQRCodeTOTP, ativarTOTP, desativarTOTP,
@@ -299,10 +301,7 @@ Gere um ofício formal com:
     return res.status(500).json({ error: msg });
   }
 });
-
-export default router;
-
-// ─── Geração de Alvará em PDF ───────────────────────────────────────────────
+// ─── Geração de Alvará em PDF ─────────────────────────────────────────────────
 router.post("/alvara/gerar", async (req: Request, res: Response) => {
   try {
     const { gerarAlvaraPDF } = await import("./alvara.service.js");
@@ -612,3 +611,44 @@ router.post("/acesso/validar", async (req: Request, res: Response) => {
     },
   });
 });
+
+// ─── Webhook WhatsApp (Z-API) ─────────────────────────────────────────────────
+
+// Webhook recebe mensagens da Z-API
+router.post("/webhook/whatsapp", async (req: Request, res: Response) => {
+  try {
+    const body = req.body;
+
+    // Z-API envia diferentes tipos de eventos — processar apenas mensagens recebidas
+    // Ignorar mensagens enviadas pelo próprio bot (isFromMe: true)
+    if (!body || body.isFromMe === true) {
+      return res.status(200).json({ ok: true });
+    }
+
+    // Extrair dados da mensagem
+    const phone = body.phone || body.from || "";
+    const texto = body.text?.message || body.message?.text || body.body || "";
+
+    if (!phone || !texto) {
+      return res.status(200).json({ ok: true });
+    }
+
+    // Processar a mensagem de forma assíncrona (não bloquear o webhook)
+    processarMensagem(phone, texto).catch(err => {
+      console.error("[WEBHOOK] Erro ao processar mensagem:", err);
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("[WEBHOOK] Erro:", err);
+    return res.status(200).json({ ok: true }); // sempre retornar 200 para a Z-API
+  }
+});
+
+// Status da conexão Z-API (para o painel admin)
+router.get("/admin/whatsapp/status", requireAdmin, async (_req: Request, res: Response) => {
+  const status = await verificarConexao();
+  return res.json(status);
+});
+
+export default router;
