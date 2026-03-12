@@ -361,6 +361,11 @@ export default function Painel() {
   const dadosCpf = pessoaSelecionada as DadosCPF | null;
   const dadosCpfCarregando = consultaNomeCarregando;
 
+  // ─── Dados Speedio (CNPJ das partes) ─────────────────────────────────────────
+  const [speedioCarregando, setSpeedioCarregando] = useState(false);
+  const [speedioResultados, setSpeedioResultados] = useState<Array<{ cnpj: string; nome: string; dados: Record<string, unknown> }>>([]);
+  const [speedioProcessoId, setSpeedioProcessoId] = useState<string | null>(null);
+
   // Status TJSP
   const [statusTJSP, setStatusTJSP] = useState<StatusTJSP>({ autenticado: false, expiracao: null, tempoRestante: null });
   const [modalCookies, setModalCookies] = useState(false);
@@ -737,6 +742,43 @@ export default function Painel() {
     buscarTelefonesPorCPF(pessoa.cpf);
   }, [buscarTelefonesPorCPF]);
 
+  // Buscar CNPJ de todas as partes na API Speedio (chamada client-side, direto do navegador)
+  const buscarDadosSpeedio = useCallback(async (partes: ParteTJSP[], processoId: string) => {
+    if (speedioProcessoId === processoId) return; // já consultado
+    setSpeedioProcessoId(processoId);
+    setSpeedioResultados([]);
+
+    // Extrair CNPJs únicos de todas as partes (14 dígitos)
+    const cnpjsVistos = new Set<string>();
+    const partesComCnpj: Array<{ cnpj: string; nome: string }> = [];
+    for (const parte of partes) {
+      const doc = (parte.documento || parte.cpfCnpj || "").replace(/\D/g, "");
+      if (doc.length === 14 && !cnpjsVistos.has(doc)) {
+        cnpjsVistos.add(doc);
+        partesComCnpj.push({ cnpj: doc, nome: parte.nome });
+      }
+    }
+
+    if (partesComCnpj.length === 0) return;
+
+    setSpeedioCarregando(true);
+    const resultados: Array<{ cnpj: string; nome: string; dados: Record<string, unknown> }> = [];
+
+    for (const { cnpj, nome } of partesComCnpj) {
+      try {
+        const resp = await fetch(`https://api-publica.speedio.com.br/buscarcnpj?cnpj=${cnpj}`);
+        if (!resp.ok) continue;
+        const dados = await resp.json();
+        if (dados && typeof dados === "object" && !dados.error) {
+          resultados.push({ cnpj, nome, dados });
+        }
+      } catch { /* silencioso */ }
+    }
+
+    setSpeedioResultados(resultados);
+    setSpeedioCarregando(false);
+  }, [speedioProcessoId]);
+
   const abrirProcesso = useCallback(async (p: ProcessoTJSP) => {
     const id = p.numeroProcesso;
     setProcessoAbertoId(id);
@@ -745,6 +787,8 @@ export default function Painel() {
     setPessoaSelecionada(null);
     setConsultaNomeProcesso(null);
     setTelefonesCpf([]);
+    setSpeedioResultados([]);
+    setSpeedioProcessoId(null);
 
     if (p.detalheCarregado || !p.codigoProcesso) {
       // Se já carregado, consultar por nome da parte passiva
@@ -753,6 +797,8 @@ export default function Painel() {
         const recebedor = p.partes.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || p.partes[0];
         const nomeRecebedor = recebedor?.nome || "";
         if (nomeRecebedor) consultarPorNome(nomeRecebedor, id, p);
+        // Buscar dados CNPJ na Speedio para partes com CNPJ
+        buscarDadosSpeedio(p.partes, id);
       }
       return;
     }
@@ -786,13 +832,15 @@ export default function Painel() {
       const recebedor = processoCompleto.partes?.find(pt => ehRecebedorDaCausa(pt.polo || pt.tipo || "")) || processoCompleto.partes?.[0];
       const nomeRecebedor = recebedor?.nome || "";
       if (nomeRecebedor) consultarPorNome(nomeRecebedor, id, processoCompleto);
+      // Buscar dados CNPJ na Speedio para partes com CNPJ
+      if (processoCompleto.partes) buscarDadosSpeedio(processoCompleto.partes, id);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Erro ao carregar detalhe: " + msg);
     } finally {
       setDetalheCarregando(false);
     }
-  }, [consultarPorNome]);
+  }, [consultarPorNome, buscarDadosSpeedio]);
 
   const configurarCookies = useCallback(async () => {
     if (!cookiesInput.trim()) {
@@ -1864,6 +1912,174 @@ export default function Painel() {
                   </div>
                 );
               })()}
+
+              {/* ─── Card Speedio: Dados de CNPJ das Partes ─────────────────── */}
+              {(speedioCarregando || speedioResultados.length > 0) && (
+                <div className="bg-gradient-to-br from-[#0a1a0a] to-[#0d2010] border border-green-800/40 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xs font-bold text-green-400 tracking-wider">🏢 DADOS CNPJ — SPEEDIO</h3>
+                    {speedioCarregando && (
+                      <span className="flex items-center gap-1.5 text-xs text-green-400">
+                        <span className="w-3 h-3 border border-green-400/30 border-t-green-400 rounded-full animate-spin"></span>
+                        Consultando Speedio...
+                      </span>
+                    )}
+                  </div>
+
+                  {speedioResultados.length === 0 && !speedioCarregando && (
+                    <p className="text-xs text-gray-600">Nenhum CNPJ encontrado nas partes deste processo.</p>
+                  )}
+
+                  {speedioResultados.map((item, idx) => {
+                    const d = item.dados as Record<string, unknown>;
+                    // Formatar CNPJ
+                    const cnpjFmt = item.cnpj.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+                    // Quadro societário
+                    const socios = (d["QSA"] || d["qsa"] || []) as Array<Record<string, unknown>>;
+                    // Capital social
+                    const capital = (d["CAPITAL SOCIAL"] || d["capital_social"] || d["capitalSocial"] || "") as string;
+                    // Endereço
+                    const logradouro = [d["TIPO LOGRADOURO"], d["LOGRADOURO"], d["NUMERO"], d["COMPLEMENTO"]].filter(Boolean).join(" ");
+                    const bairro = (d["BAIRRO"] || "") as string;
+                    const cidade = (d["MUNICIPIO"] || d["CIDADE"] || "") as string;
+                    const uf = (d["UF"] || "") as string;
+                    const cep = (d["CEP"] || "") as string;
+                    const enderecoFmt = [logradouro, bairro, cidade && uf ? `${cidade}/${uf}` : cidade, cep ? `CEP ${cep}` : ""].filter(Boolean).join(" — ");
+                    // Situação
+                    const situacao = (d["SITUACAO CADASTRAL"] || d["situacao"] || "") as string;
+                    // Natureza jurídica
+                    const natureza = (d["NATUREZA JURIDICA"] || d["natureza_juridica"] || "") as string;
+                    // Atividade principal
+                    const atividade = (d["CNAE PRINCIPAL DESCRICAO"] || d["atividade_principal"] || "") as string;
+                    // Telefone
+                    const telefone = (d["TELEFONE"] || d["telefone"] || "") as string;
+                    // Email
+                    const email = (d["EMAIL"] || d["email"] || "") as string;
+                    // Nome fantasia
+                    const nomeFantasia = (d["NOME FANTASIA"] || d["nome_fantasia"] || "") as string;
+                    // Razão social
+                    const razaoSocial = (d["RAZAO SOCIAL"] || d["razao_social"] || item.nome) as string;
+                    // Data abertura
+                    const dataAbertura = (d["DATA ABERTURA"] || d["data_abertura"] || "") as string;
+
+                    return (
+                      <div key={`speedio-${idx}`} className="mb-4 last:mb-0">
+                        {idx > 0 && <div className="border-t border-green-900/30 mb-4"></div>}
+
+                        {/* Cabeçalho */}
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div>
+                            <p className="text-sm font-bold text-white">{razaoSocial}</p>
+                            {nomeFantasia && nomeFantasia !== razaoSocial && (
+                              <p className="text-xs text-green-300 mt-0.5">Nome Fantasia: {nomeFantasia}</p>
+                            )}
+                          </div>
+                          <span className="shrink-0 px-2 py-0.5 bg-green-900/40 text-green-400 rounded text-xs font-mono">{cnpjFmt}</span>
+                        </div>
+
+                        {/* Grid de dados */}
+                        <div className="grid grid-cols-1 gap-1.5 text-xs">
+                          {situacao && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Situação:</span>
+                              <span className={`font-semibold ${situacao.toLowerCase().includes("ativa") ? "text-green-400" : "text-red-400"}`}>{situacao}</span>
+                            </div>
+                          )}
+                          {natureza && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Natureza:</span>
+                              <span className="text-gray-300">{natureza}</span>
+                            </div>
+                          )}
+                          {atividade && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Atividade:</span>
+                              <span className="text-gray-300">{atividade}</span>
+                            </div>
+                          )}
+                          {dataAbertura && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Abertura:</span>
+                              <span className="text-gray-300">{dataAbertura}</span>
+                            </div>
+                          )}
+                          {capital && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Capital Social:</span>
+                              <span className="text-emerald-400 font-semibold">{capital}</span>
+                            </div>
+                          )}
+                          {enderecoFmt && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Endereço:</span>
+                              <span className="text-gray-300">{enderecoFmt}</span>
+                            </div>
+                          )}
+                          {telefone && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Telefone:</span>
+                              <a href={`https://wa.me/55${telefone.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
+                                className="text-green-400 hover:text-green-300 font-semibold">
+                                📱 {telefone}
+                              </a>
+                            </div>
+                          )}
+                          {email && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">E-mail:</span>
+                              <a href={`mailto:${email}`} className="text-blue-400 hover:text-blue-300">{email}</a>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Quadro Societário */}
+                        {socios.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-green-900/30">
+                            <p className="text-xs font-bold text-green-300 mb-2">👥 Quadro Societário ({socios.length})</p>
+                            <div className="space-y-1.5">
+                              {socios.map((socio, si) => {
+                                const nomeSocio = (socio["NOME_SOCIO"] || socio["nome"] || socio["nome_socio"] || "") as string;
+                                const qualif = (socio["QUALIFICACAO_SOCIO"] || socio["qualificacao"] || "") as string;
+                                const cpfSocio = (socio["CPF_REPRESENTANTE_LEGAL"] || socio["cpf"] || "") as string;
+                                return (
+                                  <div key={`socio-${si}`} className="flex items-center gap-2 bg-green-950/20 rounded-lg px-3 py-1.5">
+                                    <span className="text-green-400 text-xs">👤</span>
+                                    <div>
+                                      <span className="text-xs text-white font-medium">{nomeSocio}</span>
+                                      {qualif && <span className="text-xs text-gray-500 ml-2">({qualif})</span>}
+                                      {cpfSocio && <span className="text-xs text-gray-600 ml-2 font-mono">{cpfSocio}</span>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Todos os outros campos retornados pela API */}
+                        {(() => {
+                          const camposExibidos = new Set(["QSA","qsa","RAZAO SOCIAL","razao_social","NOME FANTASIA","nome_fantasia","CNPJ","cnpj","SITUACAO CADASTRAL","situacao","NATUREZA JURIDICA","natureza_juridica","CNAE PRINCIPAL DESCRICAO","atividade_principal","DATA ABERTURA","data_abertura","CAPITAL SOCIAL","capital_social","capitalSocial","TIPO LOGRADOURO","LOGRADOURO","NUMERO","COMPLEMENTO","BAIRRO","MUNICIPIO","CIDADE","UF","CEP","TELEFONE","telefone","EMAIL","email"]);
+                          const extras = Object.entries(d).filter(([k, v]) => !camposExibidos.has(k) && v !== null && v !== undefined && v !== "" && typeof v !== "object");
+                          if (extras.length === 0) return null;
+                          return (
+                            <div className="mt-3 pt-3 border-t border-green-900/30">
+                              <p className="text-xs font-bold text-gray-500 mb-2">Dados adicionais</p>
+                              <div className="grid grid-cols-1 gap-1 text-xs">
+                                {extras.map(([k, v]) => (
+                                  <div key={k} className="flex gap-2">
+                                    <span className="text-gray-600 shrink-0 w-36 truncate">{k}:</span>
+                                    <span className="text-gray-400">{String(v)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Movimentações */}
               {processoAberto.movimentacoes && processoAberto.movimentacoes.length > 0 && (
