@@ -25,16 +25,6 @@ let _usuarioAcesso: UsuarioAcesso | null = null;
 export function getUsuarioAcesso(): UsuarioAcesso | null { return _usuarioAcesso; }
 export function setUsuarioAcesso(u: UsuarioAcesso | null) { _usuarioAcesso = u; }
 
-// Domínios que são considerados "externos/camuflados" — acesso raiz bloqueado
-const DOMINIOS_EXTERNOS = [
-  "acesso-cliente.sbs",
-  "www.acesso-cliente.sbs",
-];
-
-function isDominioExterno(): boolean {
-  return DOMINIOS_EXTERNOS.some(d => window.location.hostname === d || window.location.hostname.endsWith(`.${d}`));
-}
-
 // ─── Telas ────────────────────────────────────────────────────────────────────
 
 function CarregandoAcesso() {
@@ -85,29 +75,6 @@ function AcessoNegado({ motivo }: { motivo: string }) {
   );
 }
 
-// Página neutra para domínio externo sem código — não revela que é um painel jurídico
-function PaginaNeutra() {
-  return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <div className="max-w-sm w-full text-center">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10">
-          <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg className="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          </div>
-          <h1 className="text-lg font-semibold text-gray-700 mb-2">Acesso Restrito</h1>
-          <p className="text-gray-400 text-sm leading-relaxed">
-            Esta área é de acesso exclusivo mediante convite.
-            Utilize o link fornecido pelo responsável para acessar o sistema.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Componente que resolve o link curto ──────────────────────────────────────
 function ResolverAcessoCurto() {
   const params = useParams<{ codigo: string }>();
@@ -122,19 +89,12 @@ function ResolverAcessoCurto() {
       return;
     }
 
-    // Usar a API do servidor principal para resolver o link curto
-    // O servidor principal está no mesmo projeto — usa URL relativa se possível
-    const API_BASE = window.location.hostname === "paineljuridico.casa" || window.location.hostname === "www.paineljuridico.casa"
-      ? ""
-      : "https://paineljuridico.casa";
-
-    fetch(`${API_BASE}/api/acesso/resolver/${codigo}`)
+    fetch(`/api/acesso/resolver/${codigo}`)
       .then(r => r.json())
       .then(data => {
         if (data.valido && data.token) {
-          // Salvar token no sessionStorage — NÃO redirecionar para outro domínio
+          // Salvar token no sessionStorage e liberar painel
           sessionStorage.setItem("painel_acesso_token", data.token);
-          // Renderizar o painel diretamente no mesmo domínio
           setEstado("liberado");
         } else {
           setMotivo(data.motivo || "Link de acesso inválido ou expirado.");
@@ -159,20 +119,20 @@ function PainelComValidacao() {
   const tokenSessao = sessionStorage.getItem("painel_acesso_token");
   const token = tokenURL || tokenSessao;
 
+  // SEM TOKEN = BLOQUEIO IMEDIATO — não há estado "liberado" sem token
   const [estado, setEstado] = useState<"loading" | "liberado" | "bloqueado">(
-    token ? "loading" : "liberado"
+    token ? "loading" : "bloqueado"
   );
-  const [motivoBloqueio, setMotivoBloqueio] = useState<string>("");
+  const [motivoBloqueio, setMotivoBloqueio] = useState<string>(
+    token ? "" : "Nenhum link de acesso fornecido. Utilize o link enviado pelo administrador."
+  );
 
   useEffect(() => {
+    // Se não há token, já está bloqueado — não fazer nada
     if (!token) return;
 
-    // Usar URL absoluta do servidor principal quando no domínio externo
-    const API_BASE = (window.location.hostname === "paineljuridico.casa" || window.location.hostname === "www.paineljuridico.casa")
-      ? ""
-      : "https://paineljuridico.casa";
-
-    fetch(`${API_BASE}/api/acesso/validar`, {
+    // Sempre validar o token no servidor — NUNCA liberar acesso sem confirmação do servidor
+    fetch(`/api/acesso/validar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token }),
@@ -182,21 +142,19 @@ function PainelComValidacao() {
         if (data.valido && data.usuario) {
           setUsuarioAcesso(data.usuario);
           sessionStorage.setItem("painel_acesso_token", token);
-          sessionStorage.setItem("painel_acesso_usuario", JSON.stringify(data.usuario));
           setEstado("liberado");
         } else {
+          // Revogar/expirado: limpar tudo e bloquear
           sessionStorage.removeItem("painel_acesso_token");
-          sessionStorage.removeItem("painel_acesso_usuario");
           setMotivoBloqueio(data.motivo || "Link de acesso inválido ou expirado.");
           setEstado("bloqueado");
         }
       })
       .catch(() => {
-        const savedUsuario = sessionStorage.getItem("painel_acesso_usuario");
-        if (savedUsuario) {
-          try { setUsuarioAcesso(JSON.parse(savedUsuario)); } catch { /* ignore */ }
-        }
-        setEstado("liberado");
+        // Em caso de erro de rede, BLOQUEAR — segurança acima de tudo
+        sessionStorage.removeItem("painel_acesso_token");
+        setMotivoBloqueio("Não foi possível verificar seu acesso. Tente novamente.");
+        setEstado("bloqueado");
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -208,18 +166,14 @@ function PainelComValidacao() {
 
 // ─── Roteador principal ───────────────────────────────────────────────────────
 function Router() {
-  const [location] = useLocation();
-
-  // Se estiver no domínio externo e acessar a raiz (sem código), mostrar página neutra
-  if (isDominioExterno() && location === "/" && !new URLSearchParams(window.location.search).get("token")) {
-    return <PaginaNeutra />;
-  }
-
   return (
     <Switch>
+      {/* Rota raiz: exige token na URL ou na sessão — sem ele, bloqueia */}
       <Route path={"/"} component={PainelComValidacao} />
       <Route path={"/painel"} component={PainelComValidacao} />
+      {/* Rota de acesso via link curto — único ponto de entrada válido para funcionários */}
       <Route path={"/acesso/:codigo"} component={ResolverAcessoCurto} />
+      {/* Admin — acesso separado com senha */}
       <Route path={"/admin"} component={AdminAcesso} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
