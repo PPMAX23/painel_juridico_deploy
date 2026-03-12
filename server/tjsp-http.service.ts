@@ -162,30 +162,69 @@ export async function garantirCookies(): Promise<string> {
     console.error("[TJSP] Puppeteer indisponível:", e instanceof Error ? e.message : e);
     throw new Error("TJSP_SEM_AUTENTICACAO");
   }
-}
-
-// ─── Inicializar cookies permanentes na inicialização do servidor ───────────────
+}// ─── Inicializar cookies permanentes na inicialização do servidor ───────────────────
 // Chamado uma vez quando o servidor inicia para garantir que os cookies estão ativos
 export function inicializarCookiesPermanentes(): void {
-  const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
-  if (cookiePermanente && cookiePermanente.trim()) {
-    console.log("[TJSP] Inicializando cookies permanentes da variável de ambiente...");
-    setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
-  }
-}
-
-// ─── Fetch autenticado ────────────────────────────────────────────────────────
+  // 1º: Tentar carregar do banco de dados (persiste entre reinicializações)
+  import("./acesso.service").then(({ carregarCookiePermanenteDoBanco }) => {
+    carregarCookiePermanenteDoBanco().then((cookieBanco) => {
+      if (cookieBanco && cookieBanco.trim()) {
+        console.log("[TJSP] Inicializando cookies permanentes do banco de dados...");
+        process.env.TJSP_COOKIE_PERMANENTE = cookieBanco.trim();
+        setCookiesTJSP(cookieBanco.trim(), TTL_MAX_MS);
+        return;
+      }
+      // 2º: Fallback para variável de ambiente
+      const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+      if (cookiePermanente && cookiePermanente.trim()) {
+        console.log("[TJSP] Inicializando cookies permanentes da variável de ambiente...");
+        setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
+      }
+    }).catch(() => {
+      // Fallback para variável de ambiente se o banco falhar
+      const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+      if (cookiePermanente && cookiePermanente.trim()) {
+        console.log("[TJSP] Inicializando cookies permanentes da variável de ambiente (fallback)...");
+        setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
+      }
+    });
+  }).catch(() => {
+    const cookiePermanente = process.env.TJSP_COOKIE_PERMANENTE;
+    if (cookiePermanente && cookiePermanente.trim()) {
+      console.log("[TJSP] Inicializando cookies permanentes da variável de ambiente (fallback)...");
+      setCookiesTJSP(cookiePermanente.trim(), TTL_MAX_MS);
+    }
+  });
+}// ─── Fetch autenticado ────────────────────────────────────────────────────────
 async function fetchTJSP(url: string): Promise<string> {
   const cookies = await garantirCookies();
-  const resp = await fetch(url, {
-    headers: {
-      Cookie: cookies,
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "pt-BR,pt;q=0.9",
-      Referer: TJSP_BASE,
-    },
-  });
+  
+  // Se houver um proxy configurado (para contornar bloqueio de IP fora do Brasil), usá-lo
+  const proxyUrl = process.env.TJSP_PROXY_URL;
+  let resp: Response;
+  
+  if (proxyUrl) {
+    // Usar proxy brasileiro para acessar o TJSP
+    const proxyEndpoint = `${proxyUrl}/proxy?url=${encodeURIComponent(url)}`;
+    console.log(`[TJSP] Usando proxy: ${proxyUrl}`);
+    resp = await fetch(proxyEndpoint, {
+      headers: {
+        "x-tjsp-cookies": cookies,
+      },
+    });
+  } else {
+    // Acesso direto ao TJSP
+    resp = await fetch(url, {
+      headers: {
+        Cookie: cookies,
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+        Referer: TJSP_BASE,
+      },
+    });
+  }
+  
   if (!resp.ok) throw new Error(`HTTP ${resp.status} ao acessar ${url}`);
   const html = await resp.text();
   // Verificar se foi redirecionado para login
@@ -303,41 +342,37 @@ async function buscarTodasPaginas(
   const { totalProcessos, totalPaginas } = extrairPaginacao(htmlPag1);
 
   console.log(`[TJSP] Total encontrados: ${totalProcessos} | Páginas: ${totalPaginas}`);
-
   if (totalPaginas <= 1) {
     return { processos: processosPag1, totalEncontrados: totalProcessos };
   }
-
-  // Buscar páginas restantes em paralelo (máximo 10 páginas = 250 processos)
-  const maxPaginas = Math.min(totalPaginas, 10);
-  const paginasRestantes = Array.from({ length: maxPaginas - 1 }, (_, i) => i + 2);
-
-  const promessas = paginasRestantes.map(async (pagina) => {
-    const urlPagina = `${TJSP_BASE}/cpopg/trocarPagina.do?paginaConsulta=${pagina}&cbPesquisa=${cbPesquisa}&dadosConsulta.valorConsulta=${encodeURIComponent(valorConsulta)}&cdForo=${cdForo}`;
-    try {
-      const html = await fetchTJSP(urlPagina);
-      return extrairListaProcessos(html);
-    } catch (e) {
-      console.error(`[TJSP] Erro ao buscar página ${pagina}:`, e instanceof Error ? e.message : e);
-      return [];
-    }
-  });
-
-  const resultadosPaginas = await Promise.all(promessas);
-
-  // Juntar todos os processos, evitando duplicatas
+  // Buscar TODAS as páginas de forma SEQUENCIAL para garantir 100% de confiabilidade
+  // Busca paralela causava falhas quando o servidor está em região diferente (EUA)
   const numerosVistos = new Set(processosPag1.map(p => p.numeroProcesso));
   const todosProcessos = [...processosPag1];
-
-  for (const pagProcessos of resultadosPaginas) {
+  for (let pagina = 2; pagina <= totalPaginas; pagina++) {
+    const urlPagina = `${TJSP_BASE}/cpopg/trocarPagina.do?paginaConsulta=${pagina}&cbPesquisa=${cbPesquisa}&dadosConsulta.valorConsulta=${encodeURIComponent(valorConsulta)}&cdForo=${cdForo}`;
+    // Retry até 5 vezes por página para garantir robustez máxima
+    let pagProcessos: ProcessoResumo[] = [];
+    for (let tentativa = 1; tentativa <= 5; tentativa++) {
+      try {
+        const html = await fetchTJSP(urlPagina);
+        pagProcessos = extrairListaProcessos(html);
+        break; // Sucesso, sair do loop de retry
+      } catch (e) {
+        console.error(`[TJSP] Erro página ${pagina} (tentativa ${tentativa}/5):`, e instanceof Error ? e.message : e);
+        if (tentativa < 5) await new Promise(r => setTimeout(r, 800 * tentativa));
+      }
+    }
     for (const p of pagProcessos) {
       if (!numerosVistos.has(p.numeroProcesso)) {
         numerosVistos.add(p.numeroProcesso);
         todosProcessos.push(p);
       }
     }
+    // Pausa entre páginas para não sobrecarregar o TJSP
+    if (pagina < totalPaginas) await new Promise(r => setTimeout(r, 500));
   }
-
+  console.log(`[TJSP] Total coletado: ${todosProcessos.length} / ${totalProcessos} processos`);
   return { processos: todosProcessos, totalEncontrados: totalProcessos };
 }
 

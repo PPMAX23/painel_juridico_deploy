@@ -242,8 +242,8 @@ function AbaUsuarios() {
         return;
       }
     }
-    // Usar o link camuflado com domínio personalizado acesso-cliente.sbs
-    const url = `https://acesso-cliente.sbs/acesso/${codigo}`;
+    // Usar o domínio atual do servidor — funciona em qualquer ambiente (Railway, domínio próprio, etc.)
+    const url = `${window.location.origin}/acesso/${codigo}`;
     navigator.clipboard.writeText(url);
     setLinkCopiado(u.id);
     setTimeout(() => setLinkCopiado(null), 2000);
@@ -420,7 +420,8 @@ function ModalUsuario({ usuario, onClose }: { usuario?: Usuario; onClose: () => 
         email: email.trim() || undefined,
         permBuscar, permEnriquecimento, permAlvara, permOficio, permIA,
         limiteConsultasDia: limite,
-        expiresAt: expira ? new Date(expira).toISOString() : null,
+        // Usar fim do dia (23:59:59) no horário de Brasília (UTC-3) para que o acesso dure o dia todo
+        expiresAt: expira ? new Date(expira + 'T23:59:59-03:00').toISOString() : null,
       };
       const url = usuario ? `/api/admin/usuarios/${usuario.id}` : "/api/admin/usuarios";
       const method = usuario ? "PUT" : "POST";

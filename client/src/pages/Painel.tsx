@@ -748,14 +748,43 @@ export default function Painel() {
     setSpeedioProcessoId(processoId);
     setSpeedioResultados([]);
 
-    // Extrair CNPJs únicos de todas as partes (14 dígitos)
+    // Sufixos que indicam pessoa jurídica
+    const SUFIXOS_PJ = [
+      "LTDA", "S/A", "S.A.", "S.A", " SA", "EIRELI", " ME", " EPP",
+      "BANCO", "BRADESCO", "ITAU", "SANTANDER", "CAIXA", "UNIMED",
+      "HOSPITAL", "CLINICA", "CLÍNICA", "LABORATORIO", "LABORATÓRIO",
+      "DIAGNOSTICOS", "DIAGNÓSTICOS", "CENTRO DE", "INSTITUTO",
+      "FUNDACAO", "FUNDAÇÃO", "ASSOCIACAO", "ASSOCIAÇÃO",
+      "COOPERATIVA", "CONDOMINIO", "CONDOMÍNIO",
+      "COMERCIO", "COMÉRCIO", "INDUSTRIA", "INDÚSTRIA",
+      "SERVICOS", "SERVIÇOS", "SOLUCOES", "SOLUÇÕES",
+      "CONSTRUTORA", "INCORPORADORA", "IMOBILIARIA", "IMOBILIÁRIA",
+      "SEGURADORA", "FINANCEIRA", "CREDITO", "CRÉDITO",
+      "TELECOM", "TECNOLOGIA", "SISTEMAS", "INFORMATICA", "INFORMÁTICA",
+    ];
+
+    // 1. Tentar extrair CNPJ direto do campo documento/cpfCnpj
     const cnpjsVistos = new Set<string>();
-    const partesComCnpj: Array<{ cnpj: string; nome: string }> = [];
+    const partesComCnpj: Array<{ cnpj: string; nome: string; viaCnpj: boolean }> = [];
+
     for (const parte of partes) {
       const doc = (parte.documento || parte.cpfCnpj || "").replace(/\D/g, "");
       if (doc.length === 14 && !cnpjsVistos.has(doc)) {
         cnpjsVistos.add(doc);
-        partesComCnpj.push({ cnpj: doc, nome: parte.nome });
+        partesComCnpj.push({ cnpj: doc, nome: parte.nome, viaCnpj: true });
+      }
+    }
+
+    // 2. Se não encontrou CNPJ, buscar por nome das partes que parecem empresas
+    if (partesComCnpj.length === 0) {
+      const nomesVistos = new Set<string>();
+      for (const parte of partes) {
+        const nomeUp = (parte.nome || "").toUpperCase();
+        const ehPJ = SUFIXOS_PJ.some(s => nomeUp.includes(s));
+        if (ehPJ && !nomesVistos.has(nomeUp)) {
+          nomesVistos.add(nomeUp);
+          partesComCnpj.push({ cnpj: "", nome: parte.nome, viaCnpj: false });
+        }
       }
     }
 
@@ -764,14 +793,33 @@ export default function Painel() {
     setSpeedioCarregando(true);
     const resultados: Array<{ cnpj: string; nome: string; dados: Record<string, unknown> }> = [];
 
-    for (const { cnpj, nome } of partesComCnpj) {
+    for (const { cnpj, nome, viaCnpj } of partesComCnpj) {
       try {
-        // API cnpj.ws — gratuita, sem cadastro, funciona do servidor e do navegador
-        const resp = await fetch(`https://publica.cnpj.ws/cnpj/${cnpj}`);
-        if (!resp.ok) continue;
-        const dados = await resp.json();
-        if (dados && typeof dados === "object" && !dados.message) {
-          resultados.push({ cnpj, nome, dados });
+        let dados: Record<string, unknown> | null = null;
+        let cnpjFinal = cnpj;
+
+        if (viaCnpj && cnpj) {
+          // Busca direta por CNPJ via proxy do backend
+          const resp = await fetch(`/api/cnpj/proxy/${cnpj}`);
+          if (resp.ok) {
+            const json = await resp.json();
+            if (json && !json.message && !json.error) dados = json;
+          }
+        } else {
+          // Busca por nome via backend (usa LLM + minhareceita.org)
+          const params = new URLSearchParams({ nome });
+          const resp = await fetch(`/api/cnpj/buscar-nome?${params}`);
+          if (resp.ok) {
+            const json = await resp.json();
+            if (json.encontrado && json.dados) {
+              dados = json.dados;
+              cnpjFinal = json.cnpj || "";
+            }
+          }
+        }
+
+        if (dados) {
+          resultados.push({ cnpj: cnpjFinal, nome, dados });
         }
       } catch { /* silencioso */ }
     }
@@ -1932,59 +1980,115 @@ export default function Painel() {
                   )}
 
                   {speedioResultados.map((item, idx) => {
-                    // cnpj.ws retorna estrutura aninhada: dados raiz + estabelecimento
+                    // Suporta dois formatos:
+                    // 1. minhareceita.org: campos planos (abertura, situacao, nome, fantasia, etc.)
+                    // 2. cnpj.ws: estrutura aninhada (estabelecimento, natureza_juridica, etc.)
                     const d = item.dados as Record<string, unknown>;
                     const est = (d["estabelecimento"] || {}) as Record<string, unknown>;
+                    const isMinhareceita = !!d["abertura"]; // campo exclusivo da minhareceita.org
+
                     // Formatar CNPJ
-                    const cnpjFmt = item.cnpj.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
-                    // Quadro societário
-                    const socios = (d["socios"] || []) as Array<Record<string, unknown>>;
+                    const cnpjRaw = (isMinhareceita ? (d["cnpj"] as string || item.cnpj) : item.cnpj).replace(/\D/g, "");
+                    const cnpjFmt = cnpjRaw.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+
+                    // Razão social
+                    const razaoSocial = isMinhareceita
+                      ? (d["nome"] as string || item.nome)
+                      : (d["razao_social"] as string || item.nome);
+
+                    // Nome fantasia
+                    const nomeFantasia = isMinhareceita
+                      ? (d["fantasia"] as string || "")
+                      : (est["nome_fantasia"] as string || "");
+
+                    // Situação
+                    const situacao = isMinhareceita
+                      ? (d["situacao"] as string || "")
+                      : (est["situacao_cadastral"] as string || "");
+
+                    // Natureza jurídica
+                    const natureza = isMinhareceita
+                      ? (d["natureza_juridica"] as string || "")
+                      : ((d["natureza_juridica"] as Record<string, unknown>)?.["descricao"] as string || "");
+
+                    // Porte
+                    const porte = isMinhareceita
+                      ? (d["porte"] as string || "")
+                      : ((d["porte"] as Record<string, unknown>)?.["descricao"] as string || "");
+
+                    // Atividade principal
+                    const atividade = isMinhareceita
+                      ? (() => {
+                          const aps = d["atividade_principal"] as Array<Record<string, unknown>> | undefined;
+                          return aps && aps.length > 0 ? (aps[0]["text"] as string || "") : "";
+                        })()
+                      : ((est["atividade_principal"] as Record<string, unknown>)?.["descricao"] as string || "");
+
+                    // Data abertura
+                    const dataAbertura = isMinhareceita
+                      ? (d["abertura"] as string || "")
+                      : (est["data_inicio_atividade"] as string || "");
+
                     // Capital social
                     const capitalRaw = (d["capital_social"] || "") as string;
-                    const capital = capitalRaw && capitalRaw !== "0.00"
+                    const capital = capitalRaw && capitalRaw !== "0.00" && capitalRaw !== "0"
                       ? `R$ ${parseFloat(capitalRaw).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
                       : "";
+
                     // Endereço
-                    const tipoLog = (est["tipo_logradouro"] || "") as string;
-                    const logradouro = (est["logradouro"] || "") as string;
-                    const numero = (est["numero"] || "") as string;
-                    const complemento = (est["complemento"] || "") as string;
-                    const bairro = (est["bairro"] || "") as string;
-                    const cidadeObj = (est["cidade"] || {}) as Record<string, unknown>;
-                    const cidade = (cidadeObj["nome"] || "") as string;
-                    const estadoObj = (est["estado"] || {}) as Record<string, unknown>;
-                    const uf = (estadoObj["sigla"] || "") as string;
-                    const cepRaw = (est["cep"] || "") as string;
+                    const logradouro = isMinhareceita
+                      ? (d["logradouro"] as string || "")
+                      : ((est["tipo_logradouro"] as string || "") + " " + (est["logradouro"] as string || "")).trim();
+                    const numero = isMinhareceita
+                      ? (d["numero"] as string || "")
+                      : (est["numero"] as string || "");
+                    const complemento = isMinhareceita
+                      ? (d["complemento"] as string || "")
+                      : (est["complemento"] as string || "");
+                    const bairro = isMinhareceita
+                      ? (d["bairro"] as string || "")
+                      : (est["bairro"] as string || "");
+                    const cidade = isMinhareceita
+                      ? (d["municipio"] as string || "")
+                      : ((est["cidade"] as Record<string, unknown>)?.["nome"] as string || "");
+                    const uf = isMinhareceita
+                      ? (d["uf"] as string || "")
+                      : ((est["estado"] as Record<string, unknown>)?.["sigla"] as string || "");
+                    const cepRaw = isMinhareceita
+                      ? (d["cep"] as string || "").replace(/\D/g, "")
+                      : (est["cep"] as string || "").replace(/\D/g, "");
                     const cep = cepRaw ? cepRaw.replace(/(\d{5})(\d{3})/, "$1-$2") : "";
-                    const logradouroFmt = [tipoLog, logradouro, numero, complemento].filter(Boolean).join(" ");
+                    const logradouroFmt = [logradouro, numero, complemento].filter(Boolean).join(", ");
                     const enderecoFmt = [logradouroFmt, bairro, cidade && uf ? `${cidade}/${uf}` : cidade, cep ? `CEP ${cep}` : ""].filter(Boolean).join(" — ");
-                    // Situação
-                    const situacao = (est["situacao_cadastral"] || "") as string;
-                    // Natureza jurídica
-                    const naturezaObj = (d["natureza_juridica"] || {}) as Record<string, unknown>;
-                    const natureza = (naturezaObj["descricao"] || "") as string;
-                    // Atividade principal
-                    const atividadeObj = (est["atividade_principal"] || {}) as Record<string, unknown>;
-                    const atividade = (atividadeObj["descricao"] || "") as string;
-                    // Telefone (ddd1 + telefone1)
-                    const ddd1 = (est["ddd1"] || "") as string;
-                    const tel1 = (est["telefone1"] || "") as string;
-                    const telefone = ddd1 && tel1 ? `(${ddd1}) ${tel1}` : "";
+
+                    // Telefone
+                    const telefone = isMinhareceita
+                      ? (d["telefone"] as string || "")
+                      : (() => {
+                          const ddd1 = est["ddd1"] as string || "";
+                          const tel1 = est["telefone1"] as string || "";
+                          return ddd1 && tel1 ? `(${ddd1}) ${tel1}` : "";
+                        })();
+
                     // Email
-                    const email = (est["email"] || "") as string;
-                    // Nome fantasia
-                    const nomeFantasia = (est["nome_fantasia"] || "") as string;
-                    // Razão social
-                    const razaoSocial = (d["razao_social"] || item.nome) as string;
-                    // Data abertura
-                    const dataAbertura = (est["data_inicio_atividade"] || "") as string;
-                    // Porte
-                    const porteObj = (d["porte"] || {}) as Record<string, unknown>;
-                    const porte = (porteObj["descricao"] || "") as string;
+                    const email = isMinhareceita
+                      ? (d["email"] as string || "")
+                      : (est["email"] as string || "");
+
                     // Tipo (Matriz/Filial)
-                    const tipo = (est["tipo"] || "") as string;
+                    const tipo = isMinhareceita
+                      ? (d["tipo"] as string || "")
+                      : (est["tipo"] as string || "");
+
+                    // Quadro societário
+                    const socios = isMinhareceita
+                      ? ((d["qsa"] as Array<Record<string, unknown>>) || [])
+                      : ((d["socios"] as Array<Record<string, unknown>>) || []);
+
                     // Atividades secundárias
-                    const atividadesSecundarias = (est["atividades_secundarias"] || []) as Array<Record<string, unknown>>;
+                    const atividadesSecundarias = isMinhareceita
+                      ? ((d["atividades_secundarias"] as Array<Record<string, unknown>>) || [])
+                      : ((est["atividades_secundarias"] as Array<Record<string, unknown>>) || []);
 
                     return (
                       <div key={`cnpjws-${idx}`} className="mb-4 last:mb-0">
@@ -2070,8 +2174,10 @@ export default function Painel() {
                             <div className="space-y-1.5">
                               {socios.map((socio, si) => {
                                 const nomeSocio = (socio["nome"] || "") as string;
-                                const qualifObj = (socio["qualificacao_socio"] || {}) as Record<string, unknown>;
-                                const qualif = (qualifObj["descricao"] || "") as string;
+                                // minhareceita.org usa "qual", cnpj.ws usa "qualificacao_socio.descricao"
+                                const qualif = isMinhareceita
+                                  ? (socio["qual"] as string || "")
+                                  : ((socio["qualificacao_socio"] as Record<string, unknown>)?.["descricao"] as string || "");
                                 const faixaEtaria = (socio["faixa_etaria"] || "") as string;
                                 const dataEntrada = (socio["data_entrada"] || "") as string;
                                 return (
@@ -2098,7 +2204,7 @@ export default function Painel() {
                             <p className="text-xs font-bold text-gray-500 mb-2">Atividades Secundárias ({atividadesSecundarias.length})</p>
                             <div className="space-y-1">
                               {atividadesSecundarias.slice(0, 5).map((at, ai) => (
-                                <p key={ai} className="text-xs text-gray-500">• {(at["descricao"] || "") as string}</p>
+                                <p key={ai} className="text-xs text-gray-500">• {(isMinhareceita ? (at["text"] || at["descricao"] || "") : (at["descricao"] || "")) as string}</p>
                               ))}
                               {atividadesSecundarias.length > 5 && (
                                 <p className="text-xs text-gray-600">+ {atividadesSecundarias.length - 5} outras atividades</p>

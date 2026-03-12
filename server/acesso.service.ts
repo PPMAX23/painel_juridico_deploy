@@ -99,6 +99,28 @@ export async function alterarSenhaAdmin(novaSenha: string): Promise<void> {
   }
 }
 
+// ─── Cookie TJSP Permanente (persistência no banco) ───────────────────────────
+export async function salvarCookiePermanenteNoBanco(cookie: string): Promise<void> {
+  const d = await db();
+  const config = await obterAdminConfig();
+  if (config) {
+    await d.update(adminConfig).set({ tjspCookiePermanente: cookie } as any).where(eq(adminConfig.id, config.id));
+  } else {
+    await d.insert(adminConfig).values({ totpEnabled: false, tjspCookiePermanente: cookie } as any);
+  }
+}
+
+export async function carregarCookiePermanenteDoBanco(): Promise<string | null> {
+  try {
+    const d = await db();
+    const configs = await d.select().from(adminConfig).limit(1);
+    const config = configs[0] as any;
+    return config?.tjspCookiePermanente || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function obterQRCodeTOTP(): Promise<{ qrcode: string; secret: string; uri: string }> {
   const d = await db();
   let config = await obterAdminConfig();

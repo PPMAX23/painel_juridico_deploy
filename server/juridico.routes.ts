@@ -5,7 +5,7 @@ import { verificarConexao } from "./zapi.service";
 import { obterDDDsPorForo, filtrarPessoasPorDDD } from "./foro-ddd";
 import {
   verificarSenhaAdmin, verificarTOTP, obterQRCodeTOTP, ativarTOTP, desativarTOTP,
-  alterarSenhaAdmin, inicializarAdminConfig,
+  alterarSenhaAdmin, inicializarAdminConfig, salvarCookiePermanenteNoBanco,
   listarUsuarios, criarUsuario, atualizarUsuario, revogarUsuario, deletarUsuario, regenerarToken,
   validarToken, registrarLog, listarLogs, estatisticasUsuario,
   criarLinkCurto, resolverLinkCurto, deletarLinkCurto,
@@ -47,18 +47,12 @@ router.get("/buscar", async (req: Request, res: Response) => {
       return res.status(400).json({ error: `Tipo de busca inválido: ${tipo}` });
     }
 
-    // Filtrar processos indesejados (usucapião, herança, partilha, etc.)
-    const processosFiltrados = filtrarProcessosIndesejados(resultado.processos);
-    const totalFiltrados = resultado.processos.length - processosFiltrados.length;
-    if (totalFiltrados > 0) {
-      console.log(`[TJSP] Filtrados ${totalFiltrados} processos indesejados`);
-    }
-
+    // Retornar TODOS os processos sem filtro — 100% dos resultados do TJSP
     return res.json({
-      total: processosFiltrados.length,
+      total: resultado.processos.length,
       totalEncontrados: resultado.totalEncontrados,
-      totalFiltrados,
-      processos: processosFiltrados,
+      totalFiltrados: 0,
+      processos: resultado.processos,
       fonte: "TJSP",
     });
   } catch (err: unknown) {
@@ -124,14 +118,21 @@ router.post("/tjsp/cookies", async (req: Request, res: Response) => {
   return res.json({ ok: true, ...status });
 });
 
-// ─── Salvar cookie como permanente (atualiza env em tempo de execução) ─────────────
+// ─── Salvar cookie como permanente (persiste no banco de dados) ─────────────
 router.post("/tjsp/cookies/permanente", requireAdmin, async (req: Request, res: Response) => {
   const { cookies } = req.body as { cookies: string };
   if (!cookies || typeof cookies !== "string" || cookies.trim().length < 10) {
     return res.status(400).json({ error: "Cookies inválidos ou muito curtos" });
   }
-  // Atualizar a variável de ambiente em tempo de execução (persiste até o servidor reiniciar)
+  // Atualizar a variável de ambiente em tempo de execução
   process.env.TJSP_COOKIE_PERMANENTE = cookies.trim();
+  // Salvar no banco de dados para persistir entre reinicializações
+  try {
+    await salvarCookiePermanenteNoBanco(cookies.trim());
+    console.log("[TJSP] Cookie permanente salvo no banco de dados.");
+  } catch (e) {
+    console.warn("[TJSP] Falha ao salvar cookie no banco, usando apenas env:", e);
+  }
   setCookiesTJSP(cookies.trim(), 12 * 60 * 60 * 1000);
   console.log("[TJSP] Cookie permanente atualizado via painel admin.");
   const status = statusCookies();
@@ -526,7 +527,12 @@ router.post("/admin/usuarios", requireAdmin, async (req: Request, res: Response)
 
 router.put("/admin/usuarios/:id", requireAdmin, async (req: Request, res: Response) => {
   const id = parseInt(req.params.id);
-  const usuario = await atualizarUsuario(id, req.body);
+  const body = { ...req.body };
+  // Converter expiresAt de string ISO para Date (o Drizzle exige Date, não string)
+  if (body.expiresAt !== undefined) {
+    body.expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  }
+  const usuario = await atualizarUsuario(id, body);
   return res.json(usuario);
 });
 
@@ -562,6 +568,11 @@ router.get("/acesso/resolver/:codigo", async (req: Request, res: Response) => {
   const token = await resolverLinkCurto(codigo);
   if (!token) {
     return res.status(404).json({ valido: false, motivo: "Link de acesso inválido ou expirado" });
+  }
+  // Verificar se o usuário ainda está ativo (não revogado/excluído)
+  const validacao = await validarToken(token);
+  if (!validacao.valido) {
+    return res.status(403).json({ valido: false, motivo: validacao.motivo || "Acesso não autorizado" });
   }
   return res.json({ valido: true, token });
 });
@@ -812,6 +823,101 @@ router.post("/meu-whatsapp/desconectar", async (req: Request, res: Response) => 
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: String(e) });
+  }
+});
+
+// ─── Busca CNPJ por nome de empresa (proxy backend → minhareceita.org) ─────────
+router.get("/cnpj/buscar-nome", async (req: Request, res: Response) => {
+  const { nome } = req.query as { nome: string };
+  if (!nome || nome.trim().length < 3) {
+    return res.status(400).json({ error: "Nome muito curto" });
+  }
+
+  const nomeLimpo = nome.trim().toUpperCase();
+
+  // Detectar se é empresa pelo nome
+  const SUFIXOS_EMPRESA = [
+    "LTDA", "S/A", "S.A.", "S.A", "SA ", "EIRELI", "ME ", "EPP ",
+    "BANCO", "BRADESCO", "ITAU", "SANTANDER", "CAIXA", "UNIMED",
+    "HOSPITAL", "CLINICA", "CLÍNICA", "LABORATORIO", "LABORATÓRIO",
+    "DIAGNOSTICOS", "DIAGNÓSTICOS", "CENTRO DE", "INSTITUTO",
+    "FUNDACAO", "FUNDAÇÃO", "ASSOCIACAO", "ASSOCIAÇÃO",
+    "COOPERATIVA", "CONDOMINIO", "CONDOMÍNIO",
+    "COMERCIO", "COMÉRCIO", "INDUSTRIA", "INDÚSTRIA",
+    "SERVICOS", "SERVIÇOS", "SOLUCOES", "SOLUÇÕES",
+    "CONSTRUTORA", "INCORPORADORA", "IMOBILIARIA", "IMOBILIÁRIA",
+    "SEGURADORA", "FINANCEIRA", "CREDITO", "CRÉDITO",
+    "TELECOM", "TECNOLOGIA", "SISTEMAS", "INFORMATICA", "INFORMÁTICA",
+  ];
+
+  const ehEmpresa = SUFIXOS_EMPRESA.some(s => nomeLimpo.includes(s));
+  if (!ehEmpresa) {
+    return res.json({ encontrado: false, motivo: "Nome não parece ser de empresa" });
+  }
+
+  try {
+    // Usar LLM para identificar o CNPJ mais provável pelo nome da empresa
+    const { invokeLLM } = await import("./_core/llm");
+    const respLLM = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: "Você é um assistente especializado em identificar CNPJs de empresas brasileiras. Quando receber o nome de uma empresa, responda APENAS com o CNPJ no formato 00000000000000 (14 dígitos sem formatação), ou com a palavra DESCONHECIDO se não souber com certeza. Não invente CNPJs. Só responda com CNPJ se tiver certeza absoluta."
+        },
+        {
+          role: "user",
+          content: `Qual é o CNPJ da empresa: ${nomeLimpo}?`
+        }
+      ]
+    });
+
+    const cnpjResposta = (respLLM.choices?.[0]?.message?.content || "").toString().replace(/\D/g, "").trim();
+
+    if (cnpjResposta.length !== 14) {
+      return res.json({ encontrado: false, motivo: "CNPJ não identificado pelo LLM" });
+    }
+
+    // Buscar dados na minhareceita.org
+    const apiResp = await fetch(`https://minhareceita.org/${cnpjResposta}`, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!apiResp.ok) {
+      return res.json({ encontrado: false, motivo: `API retornou ${apiResp.status}` });
+    }
+
+    const dados = await apiResp.json() as Record<string, unknown>;
+
+    if (dados.status === "ERROR" || dados.message) {
+      return res.json({ encontrado: false, motivo: "CNPJ não encontrado na Receita Federal" });
+    }
+
+    return res.json({ encontrado: true, cnpj: cnpjResposta, dados });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── Proxy CNPJ por número (backend → minhareceita.org) ──────────────────────
+router.get("/cnpj/proxy/:cnpj", async (req: Request, res: Response) => {
+  const { cnpj } = req.params;
+  const cnpjLimpo = cnpj.replace(/\D/g, "");
+  if (cnpjLimpo.length !== 14) {
+    return res.status(400).json({ error: "CNPJ inválido" });
+  }
+  try {
+    const apiResp = await fetch(`https://minhareceita.org/${cnpjLimpo}`, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!apiResp.ok) {
+      return res.status(apiResp.status).json({ error: `API retornou ${apiResp.status}` });
+    }
+    const dados = await apiResp.json();
+    return res.json(dados);
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
   }
 });
 
