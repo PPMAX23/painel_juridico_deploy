@@ -766,10 +766,11 @@ export default function Painel() {
 
     for (const { cnpj, nome } of partesComCnpj) {
       try {
-        const resp = await fetch(`https://api-publica.speedio.com.br/buscarcnpj?cnpj=${cnpj}`);
+        // API cnpj.ws — gratuita, sem cadastro, funciona do servidor e do navegador
+        const resp = await fetch(`https://publica.cnpj.ws/cnpj/${cnpj}`);
         if (!resp.ok) continue;
         const dados = await resp.json();
-        if (dados && typeof dados === "object" && !dados.error) {
+        if (dados && typeof dados === "object" && !dados.message) {
           resultados.push({ cnpj, nome, dados });
         }
       } catch { /* silencioso */ }
@@ -1913,15 +1914,15 @@ export default function Painel() {
                 );
               })()}
 
-              {/* ─── Card Speedio: Dados de CNPJ das Partes ─────────────────── */}
+              {/* ─── Card CNPJ.WS: Dados de CNPJ das Partes ─────────────────── */}
               {(speedioCarregando || speedioResultados.length > 0) && (
                 <div className="bg-gradient-to-br from-[#0a1a0a] to-[#0d2010] border border-green-800/40 rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-xs font-bold text-green-400 tracking-wider">🏢 DADOS CNPJ — SPEEDIO</h3>
+                    <h3 className="text-xs font-bold text-green-400 tracking-wider">🏢 DADOS CNPJ — CNPJ.WS</h3>
                     {speedioCarregando && (
                       <span className="flex items-center gap-1.5 text-xs text-green-400">
                         <span className="w-3 h-3 border border-green-400/30 border-t-green-400 rounded-full animate-spin"></span>
-                        Consultando Speedio...
+                        Consultando CNPJ.WS...
                       </span>
                     )}
                   </div>
@@ -1931,39 +1932,62 @@ export default function Painel() {
                   )}
 
                   {speedioResultados.map((item, idx) => {
+                    // cnpj.ws retorna estrutura aninhada: dados raiz + estabelecimento
                     const d = item.dados as Record<string, unknown>;
+                    const est = (d["estabelecimento"] || {}) as Record<string, unknown>;
                     // Formatar CNPJ
                     const cnpjFmt = item.cnpj.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
                     // Quadro societário
-                    const socios = (d["QSA"] || d["qsa"] || []) as Array<Record<string, unknown>>;
+                    const socios = (d["socios"] || []) as Array<Record<string, unknown>>;
                     // Capital social
-                    const capital = (d["CAPITAL SOCIAL"] || d["capital_social"] || d["capitalSocial"] || "") as string;
+                    const capitalRaw = (d["capital_social"] || "") as string;
+                    const capital = capitalRaw && capitalRaw !== "0.00"
+                      ? `R$ ${parseFloat(capitalRaw).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`
+                      : "";
                     // Endereço
-                    const logradouro = [d["TIPO LOGRADOURO"], d["LOGRADOURO"], d["NUMERO"], d["COMPLEMENTO"]].filter(Boolean).join(" ");
-                    const bairro = (d["BAIRRO"] || "") as string;
-                    const cidade = (d["MUNICIPIO"] || d["CIDADE"] || "") as string;
-                    const uf = (d["UF"] || "") as string;
-                    const cep = (d["CEP"] || "") as string;
-                    const enderecoFmt = [logradouro, bairro, cidade && uf ? `${cidade}/${uf}` : cidade, cep ? `CEP ${cep}` : ""].filter(Boolean).join(" — ");
+                    const tipoLog = (est["tipo_logradouro"] || "") as string;
+                    const logradouro = (est["logradouro"] || "") as string;
+                    const numero = (est["numero"] || "") as string;
+                    const complemento = (est["complemento"] || "") as string;
+                    const bairro = (est["bairro"] || "") as string;
+                    const cidadeObj = (est["cidade"] || {}) as Record<string, unknown>;
+                    const cidade = (cidadeObj["nome"] || "") as string;
+                    const estadoObj = (est["estado"] || {}) as Record<string, unknown>;
+                    const uf = (estadoObj["sigla"] || "") as string;
+                    const cepRaw = (est["cep"] || "") as string;
+                    const cep = cepRaw ? cepRaw.replace(/(\d{5})(\d{3})/, "$1-$2") : "";
+                    const logradouroFmt = [tipoLog, logradouro, numero, complemento].filter(Boolean).join(" ");
+                    const enderecoFmt = [logradouroFmt, bairro, cidade && uf ? `${cidade}/${uf}` : cidade, cep ? `CEP ${cep}` : ""].filter(Boolean).join(" — ");
                     // Situação
-                    const situacao = (d["SITUACAO CADASTRAL"] || d["situacao"] || "") as string;
+                    const situacao = (est["situacao_cadastral"] || "") as string;
                     // Natureza jurídica
-                    const natureza = (d["NATUREZA JURIDICA"] || d["natureza_juridica"] || "") as string;
+                    const naturezaObj = (d["natureza_juridica"] || {}) as Record<string, unknown>;
+                    const natureza = (naturezaObj["descricao"] || "") as string;
                     // Atividade principal
-                    const atividade = (d["CNAE PRINCIPAL DESCRICAO"] || d["atividade_principal"] || "") as string;
-                    // Telefone
-                    const telefone = (d["TELEFONE"] || d["telefone"] || "") as string;
+                    const atividadeObj = (est["atividade_principal"] || {}) as Record<string, unknown>;
+                    const atividade = (atividadeObj["descricao"] || "") as string;
+                    // Telefone (ddd1 + telefone1)
+                    const ddd1 = (est["ddd1"] || "") as string;
+                    const tel1 = (est["telefone1"] || "") as string;
+                    const telefone = ddd1 && tel1 ? `(${ddd1}) ${tel1}` : "";
                     // Email
-                    const email = (d["EMAIL"] || d["email"] || "") as string;
+                    const email = (est["email"] || "") as string;
                     // Nome fantasia
-                    const nomeFantasia = (d["NOME FANTASIA"] || d["nome_fantasia"] || "") as string;
+                    const nomeFantasia = (est["nome_fantasia"] || "") as string;
                     // Razão social
-                    const razaoSocial = (d["RAZAO SOCIAL"] || d["razao_social"] || item.nome) as string;
+                    const razaoSocial = (d["razao_social"] || item.nome) as string;
                     // Data abertura
-                    const dataAbertura = (d["DATA ABERTURA"] || d["data_abertura"] || "") as string;
+                    const dataAbertura = (est["data_inicio_atividade"] || "") as string;
+                    // Porte
+                    const porteObj = (d["porte"] || {}) as Record<string, unknown>;
+                    const porte = (porteObj["descricao"] || "") as string;
+                    // Tipo (Matriz/Filial)
+                    const tipo = (est["tipo"] || "") as string;
+                    // Atividades secundárias
+                    const atividadesSecundarias = (est["atividades_secundarias"] || []) as Array<Record<string, unknown>>;
 
                     return (
-                      <div key={`speedio-${idx}`} className="mb-4 last:mb-0">
+                      <div key={`cnpjws-${idx}`} className="mb-4 last:mb-0">
                         {idx > 0 && <div className="border-t border-green-900/30 mb-4"></div>}
 
                         {/* Cabeçalho */}
@@ -1973,6 +1997,7 @@ export default function Painel() {
                             {nomeFantasia && nomeFantasia !== razaoSocial && (
                               <p className="text-xs text-green-300 mt-0.5">Nome Fantasia: {nomeFantasia}</p>
                             )}
+                            {tipo && <span className="text-xs text-gray-500">{tipo}</span>}
                           </div>
                           <span className="shrink-0 px-2 py-0.5 bg-green-900/40 text-green-400 rounded text-xs font-mono">{cnpjFmt}</span>
                         </div>
@@ -1991,6 +2016,12 @@ export default function Painel() {
                               <span className="text-gray-300">{natureza}</span>
                             </div>
                           )}
+                          {porte && (
+                            <div className="flex gap-2">
+                              <span className="text-gray-500 shrink-0 w-28">Porte:</span>
+                              <span className="text-gray-300">{porte}</span>
+                            </div>
+                          )}
                           {atividade && (
                             <div className="flex gap-2">
                               <span className="text-gray-500 shrink-0 w-28">Atividade:</span>
@@ -1999,7 +2030,7 @@ export default function Painel() {
                           )}
                           {dataAbertura && (
                             <div className="flex gap-2">
-                              <span className="text-gray-500 shrink-0 w-28">Abertura:</span>
+                              <span className="text-gray-500 shrink-0 w-28">Início Atividade:</span>
                               <span className="text-gray-300">{dataAbertura}</span>
                             </div>
                           )}
@@ -2038,16 +2069,21 @@ export default function Painel() {
                             <p className="text-xs font-bold text-green-300 mb-2">👥 Quadro Societário ({socios.length})</p>
                             <div className="space-y-1.5">
                               {socios.map((socio, si) => {
-                                const nomeSocio = (socio["NOME_SOCIO"] || socio["nome"] || socio["nome_socio"] || "") as string;
-                                const qualif = (socio["QUALIFICACAO_SOCIO"] || socio["qualificacao"] || "") as string;
-                                const cpfSocio = (socio["CPF_REPRESENTANTE_LEGAL"] || socio["cpf"] || "") as string;
+                                const nomeSocio = (socio["nome"] || "") as string;
+                                const qualifObj = (socio["qualificacao_socio"] || {}) as Record<string, unknown>;
+                                const qualif = (qualifObj["descricao"] || "") as string;
+                                const faixaEtaria = (socio["faixa_etaria"] || "") as string;
+                                const dataEntrada = (socio["data_entrada"] || "") as string;
                                 return (
-                                  <div key={`socio-${si}`} className="flex items-center gap-2 bg-green-950/20 rounded-lg px-3 py-1.5">
-                                    <span className="text-green-400 text-xs">👤</span>
-                                    <div>
+                                  <div key={`socio-${si}`} className="bg-green-950/20 rounded-lg px-3 py-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-green-400 text-xs">👤</span>
                                       <span className="text-xs text-white font-medium">{nomeSocio}</span>
-                                      {qualif && <span className="text-xs text-gray-500 ml-2">({qualif})</span>}
-                                      {cpfSocio && <span className="text-xs text-gray-600 ml-2 font-mono">{cpfSocio}</span>}
+                                      {qualif && <span className="text-xs text-gray-500">({qualif})</span>}
+                                    </div>
+                                    <div className="flex gap-3 mt-1 ml-5">
+                                      {faixaEtaria && <span className="text-xs text-gray-600">🎂 {faixaEtaria}</span>}
+                                      {dataEntrada && <span className="text-xs text-gray-600">📅 Entrada: {dataEntrada}</span>}
                                     </div>
                                   </div>
                                 );
@@ -2056,25 +2092,20 @@ export default function Painel() {
                           </div>
                         )}
 
-                        {/* Todos os outros campos retornados pela API */}
-                        {(() => {
-                          const camposExibidos = new Set(["QSA","qsa","RAZAO SOCIAL","razao_social","NOME FANTASIA","nome_fantasia","CNPJ","cnpj","SITUACAO CADASTRAL","situacao","NATUREZA JURIDICA","natureza_juridica","CNAE PRINCIPAL DESCRICAO","atividade_principal","DATA ABERTURA","data_abertura","CAPITAL SOCIAL","capital_social","capitalSocial","TIPO LOGRADOURO","LOGRADOURO","NUMERO","COMPLEMENTO","BAIRRO","MUNICIPIO","CIDADE","UF","CEP","TELEFONE","telefone","EMAIL","email"]);
-                          const extras = Object.entries(d).filter(([k, v]) => !camposExibidos.has(k) && v !== null && v !== undefined && v !== "" && typeof v !== "object");
-                          if (extras.length === 0) return null;
-                          return (
-                            <div className="mt-3 pt-3 border-t border-green-900/30">
-                              <p className="text-xs font-bold text-gray-500 mb-2">Dados adicionais</p>
-                              <div className="grid grid-cols-1 gap-1 text-xs">
-                                {extras.map(([k, v]) => (
-                                  <div key={k} className="flex gap-2">
-                                    <span className="text-gray-600 shrink-0 w-36 truncate">{k}:</span>
-                                    <span className="text-gray-400">{String(v)}</span>
-                                  </div>
-                                ))}
-                              </div>
+                        {/* Atividades Secundárias */}
+                        {atividadesSecundarias.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-green-900/30">
+                            <p className="text-xs font-bold text-gray-500 mb-2">Atividades Secundárias ({atividadesSecundarias.length})</p>
+                            <div className="space-y-1">
+                              {atividadesSecundarias.slice(0, 5).map((at, ai) => (
+                                <p key={ai} className="text-xs text-gray-500">• {(at["descricao"] || "") as string}</p>
+                              ))}
+                              {atividadesSecundarias.length > 5 && (
+                                <p className="text-xs text-gray-600">+ {atividadesSecundarias.length - 5} outras atividades</p>
+                              )}
                             </div>
-                          );
-                        })()}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
